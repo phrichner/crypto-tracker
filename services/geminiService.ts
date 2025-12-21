@@ -11,8 +11,8 @@ interface PriceResult {
 
 export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => {
   try {
-    // Get API key from environment variable (set in vite.config.ts)
-    const apiKey = import.meta.env.VITE_API_KEY || process.env.API_KEY || '';
+    // Get API key from Vite environment variable
+    const apiKey = import.meta.env.VITE_API_KEY || '';
     
     if (!apiKey) {
       throw new Error("API key not configured");

@@ -38,9 +38,9 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
         <div>
           <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
             {asset.ticker}
-            {asset.error && <AlertCircle size={16} className="text-red-500" />}
+            {asset.error && <AlertCircle size={16} className="text-red-500" title={asset.error} />}
             {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
-            {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
+            {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} title="Significant allocation deviation" />}
           </h3>
           <p className="text-slate-400 text-sm font-mono">{asset.quantity.toLocaleString()} units</p>
         </div>
@@ -86,7 +86,16 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
                 <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1"><Target size={12} /> Target Allocation</span>
                 <span className="text-xs font-medium text-slate-300">{currentAllocation.toFixed(1)}% / {asset.targetAllocation || 0}%</span>
              </div>
-             <input type="number" value={asset.targetAllocation || ''} onChange={(e) => onUpdate(asset.id, { targetAllocation: parseFloat(e.target.value) })} className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500" placeholder="Set target %" />
+             <input 
+                type="number" 
+                value={asset.targetAllocation || ''} 
+                onChange={(e) => {
+                    const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                    onUpdate(asset.id, { targetAllocation: val });
+                }} 
+                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500" 
+                placeholder="Set target %" 
+             />
           </div>
 
           <div>

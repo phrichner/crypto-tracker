@@ -1,10 +1,11 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Asset, PortfolioSummary, Transaction, HistorySnapshot } from './types';
 import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
 import { Summary } from './components/Summary';
-import { LayoutDashboard, Wallet, Download, Upload, FileJson } from 'lucide-react';
+import { Wallet, Download, Upload } from 'lucide-react';
 
 const App: React.FC = () => {
   const [assets, setAssets] = useState<Asset[]>(() => {
@@ -51,9 +52,33 @@ const App: React.FC = () => {
     };
     setHistory(prev => {
       const newHistory = [...prev, snapshot];
-      return newHistory.length > 100 ? newHistory.slice(newHistory.length - 100) : newHistory;
+      return newHistory.length > 200 ? newHistory.slice(newHistory.length - 200) : newHistory;
     });
   }, []);
+
+  const handleUpdateAsset = (id: string, updates: Partial<Asset>) => {
+    setAssets(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
+  };
+
+  const handleRefreshAsset = async (id: string) => {
+    const asset = assets.find(a => a.id === id);
+    if (!asset) return;
+    
+    setAssets(prev => prev.map(a => a.id === id ? { ...a, isUpdating: true } : a));
+    try {
+      const result = await fetchCryptoPrice(asset.ticker);
+      setAssets(prev => prev.map(a => a.id === id ? { 
+        ...a, 
+        currentPrice: result.price, 
+        sources: result.sources, 
+        lastUpdated: new Date().toISOString(),
+        isUpdating: false,
+        error: undefined 
+      } : a));
+    } catch (error) {
+       setAssets(prev => prev.map(a => a.id === id ? { ...a, isUpdating: false, error: 'Failed' } : a));
+    }
+  };
 
   const handleAddAsset = async (ticker: string, quantity: number, pricePerCoin: number, date: string) => {
     const totalCost = quantity * pricePerCoin;
@@ -111,6 +136,32 @@ const App: React.FC = () => {
     setIsLoading(false);
   };
 
+  const exportPortfolio = () => {
+    const dataStr = JSON.stringify({ assets, history }, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `portfolio-backup-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+  };
+
+  const importPortfolio = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (parsed.assets) setAssets(parsed.assets);
+        if (parsed.history) setHistory(parsed.history);
+      } catch (err) {
+        alert("Invalid portfolio file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 pb-20">
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
@@ -120,9 +171,9 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold text-white">Portfolio Tracker</h1>
           </div>
           <div className="flex items-center gap-2">
-             <input type="file" ref={fileInputRef} onChange={(e) => {}} accept=".json" className="hidden" />
-             <button onClick={() => {}} className="p-2 text-slate-400 hover:text-white"><Upload size={20} /></button>
-             <button onClick={() => {}} className="p-2 text-slate-400 hover:text-white"><Download size={20} /></button>
+             <input type="file" ref={fileInputRef} onChange={importPortfolio} accept=".json" className="hidden" />
+             <button onClick={() => fileInputRef.current?.click()} className="p-2 text-slate-400 hover:text-white" title="Import Data"><Upload size={20} /></button>
+             <button onClick={exportPortfolio} className="p-2 text-slate-400 hover:text-white" title="Export Data"><Download size={20} /></button>
           </div>
         </div>
       </header>
@@ -131,7 +182,16 @@ const App: React.FC = () => {
         <AddAssetForm onAdd={handleAddAsset} isGlobalLoading={isLoading} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {assets.map(asset => (
-            <AssetCard key={asset.id} asset={asset} totalPortfolioValue={summary.totalValue} onRemoveTransaction={handleRemoveTransaction} onRefresh={() => {}} onRemove={() => setAssets(prev => prev.filter(a => a.id !== asset.id))} onUpdate={() => {}} onRetryHistory={() => {}} />
+            <AssetCard 
+              key={asset.id} 
+              asset={asset} 
+              totalPortfolioValue={summary.totalValue} 
+              onRemoveTransaction={handleRemoveTransaction} 
+              onRefresh={handleRefreshAsset} 
+              onRemove={() => setAssets(prev => prev.filter(a => a.id !== asset.id))} 
+              onUpdate={handleUpdateAsset} 
+              onRetryHistory={() => {}} 
+            />
           ))}
         </div>
       </main>

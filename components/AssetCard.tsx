@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Asset } from '../types';
 import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle } from 'lucide-react';
@@ -38,9 +37,9 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
         <div>
           <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
             {asset.ticker}
-            {asset.error && <AlertCircle size={16} className="text-red-500" title={asset.error} />}
+            {asset.error && <AlertCircle size={16} className="text-red-500" />}
             {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
-            {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} title="Significant allocation deviation" />}
+            {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
           </h3>
           <p className="text-slate-400 text-sm font-mono">{asset.quantity.toLocaleString()} units</p>
         </div>
@@ -82,55 +81,66 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
       {showDetails && (
         <div className="mt-4 space-y-4 animate-fadeIn">
           <div className="bg-slate-900/50 p-3 rounded border border-slate-700/50">
-             <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1"><Target size={12} /> Target Allocation</span>
-                <span className="text-xs font-medium text-slate-300">{currentAllocation.toFixed(1)}% / {asset.targetAllocation || 0}%</span>
-             </div>
-             <input 
-                type="number" 
-                value={asset.targetAllocation || ''} 
-                onChange={(e) => {
-                    const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
-                    onUpdate(asset.id, { targetAllocation: val });
-                }} 
-                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500" 
-                placeholder="Set target %" 
-             />
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1">
+                <Target size={12} /> Target Allocation
+              </span>
+              <span className="text-xs font-medium text-slate-300">
+                {currentAllocation.toFixed(1)}% / {asset.targetAllocation || 0}%
+              </span>
+            </div>
+            <input 
+              type="number" 
+              value={asset.targetAllocation || 0} 
+              onChange={(e) => {
+                const val = parseFloat(e.target.value) || 0;
+                onUpdate(asset.id, { targetAllocation: val });
+              }} 
+              className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white outline-none focus:border-indigo-500" 
+              placeholder="Set target %" 
+            />
           </div>
 
           <div>
-             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2 flex items-center gap-1"><History size={10} /> History</p>
-             <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-900/30 rounded border border-slate-700/50">
-               <table className="w-full text-left text-[11px]">
-                 <thead className="bg-slate-800/50 text-slate-400 sticky top-0">
-                   <tr>
-                     <th className="p-2">Date</th>
-                     <th className="p-2">Qty</th>
-                     <th className="p-2 text-right">Cost</th>
-                     <th className="p-2 text-right">P&L</th>
-                     <th className="p-2 w-8"></th>
-                   </tr>
-                 </thead>
-                 <tbody className="divide-y divide-slate-700/50 text-slate-300">
-                   {asset.transactions.map((tx) => {
-                     const txPnL = (tx.quantity * asset.currentPrice) - tx.totalCost;
-                     return (
-                       <tr key={tx.id} className="hover:bg-white/5">
-                         <td className="p-2 text-slate-400">{tx.date}</td>
-                         <td className="p-2 font-mono">{tx.quantity}</td>
-                         <td className="p-2 text-right font-mono">{currencyFmt.format(tx.totalCost)}</td>
-                         <td className={`p-2 text-right font-mono ${txPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{txPnL >= 0 ? '+' : ''}{currencyFmt.format(txPnL)}</td>
-                         <td className="p-2 text-right">
-                            <button onClick={() => onRemoveTransaction(asset.id, tx.id)} className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-400/10">
-                              <Trash2 size={12} />
-                            </button>
-                         </td>
-                       </tr>
-                     );
-                   })}
-                 </tbody>
-               </table>
-             </div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2 flex items-center gap-1">
+              <History size={10} /> History
+            </p>
+            <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-900/30 rounded border border-slate-700/50">
+              <table className="w-full text-left text-[11px]">
+                <thead className="bg-slate-800/50 text-slate-400 sticky top-0">
+                  <tr>
+                    <th className="p-2">Date</th>
+                    <th className="p-2">Qty</th>
+                    <th className="p-2 text-right">Cost</th>
+                    <th className="p-2 text-right">P&L</th>
+                    <th className="p-2 w-8"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/50 text-slate-300">
+                  {asset.transactions.map((tx) => {
+                    const txPnL = (tx.quantity * asset.currentPrice) - tx.totalCost;
+                    return (
+                      <tr key={tx.id} className="hover:bg-white/5">
+                        <td className="p-2 text-slate-400">{tx.date}</td>
+                        <td className="p-2 font-mono">{tx.quantity}</td>
+                        <td className="p-2 text-right font-mono">{currencyFmt.format(tx.totalCost)}</td>
+                        <td className={`p-2 text-right font-mono ${txPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {txPnL >= 0 ? '+' : ''}{currencyFmt.format(txPnL)}
+                        </td>
+                        <td className="p-2 text-right">
+                          <button 
+                            onClick={() => onRemoveTransaction(asset.id, tx.id)} 
+                            className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-400/10"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

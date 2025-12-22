@@ -23,14 +23,12 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Check if API key exists
   useEffect(() => {
     const checkApiKey = () => {
       const key = localStorage.getItem('gemini_api_key');
       setHasApiKey(!!key);
     };
     checkApiKey();
-    // Check again when settings modal closes
     window.addEventListener('storage', checkApiKey);
     return () => window.removeEventListener('storage', checkApiKey);
   }, [isSettingsOpen]);
@@ -87,7 +85,8 @@ const App: React.FC = () => {
         sources: result.sources, 
         lastUpdated: new Date().toISOString(),
         isUpdating: false,
-        error: undefined 
+        error: undefined,
+        name: result.name || result.symbol || a.name
       } : a));
     } catch (error: any) {
        setAssets(prev => prev.map(a => a.id === id ? { ...a, isUpdating: false, error: error.message || 'Failed' } : a));
@@ -108,11 +107,29 @@ const App: React.FC = () => {
       } : a));
     } else {
       const newId = Math.random().toString(36).substr(2, 9);
-      const tempAsset: Asset = { id: newId, ticker, quantity, currentPrice: 0, lastUpdated: new Date().toISOString(), sources: [], isUpdating: true, transactions: [newTx], avgBuyPrice: pricePerCoin, totalCostBasis: totalCost };
+      const tempAsset: Asset = { 
+        id: newId, 
+        ticker, 
+        name: undefined,
+        quantity, 
+        currentPrice: 0, 
+        lastUpdated: new Date().toISOString(), 
+        sources: [], 
+        isUpdating: true, 
+        transactions: [newTx], 
+        avgBuyPrice: pricePerCoin, 
+        totalCostBasis: totalCost 
+      };
       setAssets(prev => [...prev, tempAsset]);
       try {
         const result = await fetchCryptoPrice(ticker);
-        setAssets(prev => prev.map(a => a.id === newId ? { ...a, currentPrice: result.price, sources: result.sources, isUpdating: false } : a));
+        setAssets(prev => prev.map(a => a.id === newId ? { 
+          ...a, 
+          currentPrice: result.price, 
+          sources: result.sources, 
+          isUpdating: false,
+          name: result.name || result.symbol || a.name
+        } : a));
         const historyData = await fetchAssetHistory(ticker);
         if (historyData) setAssets(prev => prev.map(a => a.id === newId ? { ...a, priceHistory: historyData } : a));
       } catch (error: any) {
@@ -141,7 +158,7 @@ const App: React.FC = () => {
     for (let i = 0; i < updated.length; i++) {
       try {
         const res = await fetchCryptoPrice(updated[i].ticker);
-        updated[i] = { ...updated[i], currentPrice: res.price, lastUpdated: new Date().toISOString() };
+        updated[i] = { ...updated[i], currentPrice: res.price, lastUpdated: new Date().toISOString(), name: res.name || res.symbol || updated[i].name };
         setAssets([...updated]);
         await delay(300);
       } catch (e) {}

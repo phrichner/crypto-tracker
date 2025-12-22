@@ -31,16 +31,21 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
   const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
   const pctFmt = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2, signDisplay: "always" });
 
+  const isContractAddress = asset.ticker.startsWith('0x') && asset.ticker.length >= 40;
+
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg relative overflow-hidden transition-all hover:border-slate-600">
       <div className="flex justify-between items-start mb-2">
         <div>
           <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
-            {asset.ticker}
+            {asset.name || asset.ticker}
             {asset.error && <AlertCircle size={16} className="text-red-500" />}
             {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
             {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
           </h3>
+          {asset.name && isContractAddress && (
+            <p className="text-slate-500 text-xs font-mono mb-1">{asset.ticker.slice(0, 10)}...{asset.ticker.slice(-8)}</p>
+          )}
           <p className="text-slate-400 text-sm font-mono">{asset.quantity.toLocaleString()} units</p>
         </div>
         <div className="text-right">

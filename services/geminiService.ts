@@ -19,7 +19,7 @@ const isContractAddress = (input: string): boolean => {
 };
 
 // -----------------------------------------------------------------------------
-// DEX price via Dexscreener (REKT/WETH → WETH/USD)
+// DEX price via Dexscreener (Token/WETH × WETH/USD)
 // -----------------------------------------------------------------------------
 
 export const fetchTokenPriceFromDex = async (
@@ -43,26 +43,26 @@ export const fetchTokenPriceFromDex = async (
     const tokenAddress = contractAddress.toLowerCase();
 
     // -------------------------------------------------------------------------
-    // 1) Enforce REKT/WETH pair (base = token, quote = WETH)
+    // 1) Select Token/WETH pair with highest liquidity
     // -------------------------------------------------------------------------
 
-    const rektWethPairs = data.pairs.filter((pair: any) =>
+    const tokenWethPairs = data.pairs.filter((pair: any) =>
       pair.baseToken?.address?.toLowerCase() === tokenAddress &&
       pair.quoteToken?.symbol === "WETH" &&
       pair.priceNative &&
       pair.liquidity?.usd > 1000
     );
 
-    if (rektWethPairs.length === 0) {
-      throw new Error("No REKT/WETH pair with sufficient liquidity found");
+    if (tokenWethPairs.length === 0) {
+      throw new Error("No Token/WETH pair with sufficient liquidity found");
     }
 
-    const bestPair = rektWethPairs.sort(
+    const bestPair = tokenWethPairs.sort(
       (a: any, b: any) => b.liquidity.usd - a.liquidity.usd
     )[0];
 
     // -------------------------------------------------------------------------
-    // 2) Fetch current WETH/USD
+    // 2) Fetch current WETH/USD price
     // -------------------------------------------------------------------------
 
     const wethRes = await fetch(
@@ -81,16 +81,21 @@ export const fetchTokenPriceFromDex = async (
     }
 
     // -------------------------------------------------------------------------
-    // 3) Compute final USD price
+    // 3) Compute USD price with decimals correction
     // -------------------------------------------------------------------------
 
     const priceNative = parseFloat(bestPair.priceNative);
 
     if (isNaN(priceNative) || priceNative <= 0) {
-      throw new Error("Invalid priceNative from REKT/WETH pair");
+      throw new Error("Invalid priceNative from Token/WETH pair");
     }
 
-    const price = priceNative * wethUsd;
+    const decimals =
+      typeof bestPair.baseToken?.decimals === "number"
+        ? bestPair.baseToken.decimals
+        : 9;
+
+    const price = (priceNative * wethUsd) / Math.pow(10, decimals);
 
     // -------------------------------------------------------------------------
     // 4) Return
@@ -98,16 +103,19 @@ export const fetchTokenPriceFromDex = async (
 
     return {
       price,
-      name: bestPair.baseToken?.name || "Unknown Token",
+      name:
+        bestPair.baseToken?.name ||
+        bestPair.baseToken?.symbol ||
+        "Unknown Token",
       sources: [
         {
-          title: `${bestPair.dexId} (${bestPair.chainId}) REKT/WETH`,
+          title: `${bestPair.dexId} (${bestPair.chainId}) ${bestPair.baseToken?.symbol}/WETH`,
           url:
             bestPair.url ||
             `https://dexscreener.com/${bestPair.chainId}/${bestPair.pairAddress}`,
         },
       ],
-      rawText: "Computed from REKT/WETH × WETH/USD",
+      rawText: `Computed from ${bestPair.baseToken?.symbol}/WETH × WETH/USD`,
     };
   } catch (error: any) {
     throw new Error(error.message || "Failed to fetch price from DEXScreener");
@@ -126,7 +134,7 @@ export const fetchCryptoPrice = async (
   }
 
   // ---------------------------------------------------------------------------
-  // Gemini AI for tickers (BTC, ETH, etc.)
+  // Gemini AI for ticker symbols (BTC, ETH, etc.)
   // ---------------------------------------------------------------------------
 
   try {

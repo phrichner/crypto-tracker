@@ -18,10 +18,71 @@ const isContractAddress = (input: string): boolean => {
   return result;
 };
 
+// Save price snapshot to localStorage
+const savePriceSnapshot = (ticker: string, price: number) => {
+  try {
+    const key = `price_snapshots_${ticker}`;
+    const existing = localStorage.getItem(key);
+    const snapshots: [number, number][] = existing ? JSON.parse(existing) : [];
+    
+    const now = Date.now();
+    // Only save if we don't have a snapshot from today already
+    const lastSnapshot = snapshots[snapshots.length - 1];
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    
+    if (!lastSnapshot || (now - lastSnapshot[0]) > oneDayMs) {
+      snapshots.push([now, price]);
+      // Keep only last 2000 data points (same as CryptoCompare limit)
+      if (snapshots.length > 2000) {
+        snapshots.shift();
+      }
+      localStorage.setItem(key, JSON.stringify(snapshots));
+      console.log(`💾 Saved price snapshot for ${ticker}: $${price}`);
+    }
+  } catch (e) {
+    console.warn('Failed to save price snapshot:', e);
+  }
+};
+
+// Load price snapshots from localStorage
+const loadPriceSnapshots = (ticker: string): [number, number][] => {
+  try {
+    const key = `price_snapshots_${ticker}`;
+    const existing = localStorage.getItem(key);
+    return existing ? JSON.parse(existing) : [];
+  } catch (e) {
+    console.warn('Failed to load price snapshots:', e);
+    return [];
+  }
+};
+
+// Merge API history with local snapshots
+const mergeHistoryWithSnapshots = (apiHistory: [number, number][], localSnapshots: [number, number][]): [number, number][] => {
+  if (localSnapshots.length === 0) return apiHistory;
+  if (apiHistory.length === 0) return localSnapshots;
+  
+  // Combine and sort by timestamp
+  const combined = [...apiHistory, ...localSnapshots];
+  combined.sort((a, b) => a[0] - b[0]);
+  
+  // Remove duplicates (keep newer entries)
+  const deduped: [number, number][] = [];
+  const seenDates = new Set<string>();
+  
+  for (const [timestamp, price] of combined) {
+    const dateKey = new Date(timestamp).toDateString();
+    if (!seenDates.has(dateKey)) {
+      seenDates.add(dateKey);
+      deduped.push([timestamp, price]);
+    }
+  }
+  
+  return deduped;
+};
+
 export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<PriceResult> => {
   console.log('🚀 fetchTokenPriceFromDex called with:', contractAddress);
   
-  // Normalize to lowercase for API call
   const normalizedAddress = contractAddress.toLowerCase();
   
   try {
@@ -43,7 +104,6 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
     
     console.log(`📊 Found ${data.pairs.length} pairs`);
     
-    // Sort by liquidity USD (highest first)
     const sortedPairs = data.pairs
       .filter((pair: any) => {
         const hasPrice = pair.priceUsd && parseFloat(pair.priceUsd) > 0;
@@ -73,7 +133,6 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
       liquidity: bestPair.liquidity?.usd
     });
     
-    // Parse price - the API returns it as a string
     const priceStr = String(bestPair.priceUsd);
     const price = parseFloat(priceStr);
     
@@ -92,6 +151,9 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
     const tokenSymbol = bestPair.baseToken?.symbol || contractAddress.slice(0, 8);
     
     console.log('🏷️ Token info:', { name: tokenName, symbol: tokenSymbol });
+    
+    // Save price snapshot for future historical data
+    savePriceSnapshot(contractAddress, price);
     
     const liquidityUsdFormatted = (parseFloat(bestPair.liquidity?.usd || 0) / 1000000).toFixed(2);
     
@@ -157,6 +219,9 @@ Return ONLY the current numeric price value in USD. No symbols, no explanations.
       throw new Error("Could not extract valid price from AI response");
     }
     
+    // Save price snapshot
+    savePriceSnapshot(ticker, price);
+    
     const sources: SourceLink[] = (response.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
       .filter(c => c.web && c.web.uri)
       .map(c => ({ title: c.web.title || 'Source', url: c.web.uri }));
@@ -168,6 +233,9 @@ Return ONLY the current numeric price value in USD. No symbols, no explanations.
 };
 
 export const fetchAssetHistory = async (ticker: string, currentPrice?: number, tokenSymbol?: string): Promise<number[][] | undefined> => {
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const daysThreshold = 365;
+  
   // For contract addresses with a known symbol, try CryptoCompare first
   if (isContractAddress(ticker) && tokenSymbol) {
     try {
@@ -183,24 +251,31 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
             .map((d: any) => [d.time * 1000, d.close])
             .filter((p: any) => p[1] > 0);
           
-          // Verify the latest price is reasonably close to current price (within 50% either way)
-          if (currentPrice && historyData.length > 0) {
-            const latestHistoricalPrice = historyData[historyData.length - 1][1];
-            const priceRatio = latestHistoricalPrice / currentPrice;
-            
-            console.log(`🔍 Price verification: Historical=${latestHistoricalPrice}, Current=${currentPrice}, Ratio=${priceRatio}`);
-            
-            // If prices are within reasonable range (0.5x to 2x), it's likely the right token
-            if (priceRatio >= 0.5 && priceRatio <= 2.0) {
-              console.log(`✅ CryptoCompare history validated for ${tokenSymbol}`);
-              return historyData;
+          console.log(`📊 CryptoCompare returned ${historyData.length} data points`);
+          
+          // Check if we have at least 365 days of data
+          if (historyData.length >= daysThreshold) {
+            // Verify price match
+            if (currentPrice && historyData.length > 0) {
+              const latestHistoricalPrice = historyData[historyData.length - 1][1];
+              const priceRatio = latestHistoricalPrice / currentPrice;
+              
+              console.log(`🔍 Price verification: Historical=${latestHistoricalPrice}, Current=${currentPrice}, Ratio=${priceRatio}`);
+              
+              if (priceRatio >= 0.5 && priceRatio <= 2.0) {
+                console.log(`✅ CryptoCompare has ${historyData.length} days - using it!`);
+                const localSnapshots = loadPriceSnapshots(ticker);
+                return mergeHistoryWithSnapshots(historyData, localSnapshots);
+              } else {
+                console.warn(`⚠️ Price mismatch - trying CoinGecko instead`);
+              }
             } else {
-              console.warn(`⚠️ Price mismatch - probably different token with same symbol`);
+              console.log(`✅ CryptoCompare has ${historyData.length} days - using it (no price verification)`);
+              const localSnapshots = loadPriceSnapshots(ticker);
+              return mergeHistoryWithSnapshots(historyData, localSnapshots);
             }
           } else {
-            // No current price to verify, use data anyway
-            console.log(`✅ CryptoCompare history found for ${tokenSymbol} (no price verification)`);
-            return historyData;
+            console.log(`⚠️ CryptoCompare only has ${historyData.length} days (< 365) - trying CoinGecko for better coverage`);
           }
         }
       }
@@ -209,11 +284,11 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
     }
   }
   
-  // For contract addresses, try CoinGecko as fallback
+  // For contract addresses, try CoinGecko
   if (isContractAddress(ticker)) {
     try {
       const normalizedAddress = ticker.toLowerCase();
-      console.log('📈 Fetching history for contract address from CoinGecko:', normalizedAddress);
+      console.log('📈 Fetching history from CoinGecko (365 days):', normalizedAddress);
       
       const res = await fetch(
         `https://api.coingecko.com/api/v3/coins/ethereum/contract/${normalizedAddress}/market_chart/?vs_currency=usd&days=365`
@@ -224,13 +299,22 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
         console.log('✅ CoinGecko history received:', json.prices?.length, 'data points');
         
         if (json.prices && json.prices.length > 0) {
-          return json.prices.filter((p: any) => p[1] > 0);
+          const apiHistory = json.prices.filter((p: any) => p[1] > 0);
+          const localSnapshots = loadPriceSnapshots(ticker);
+          return mergeHistoryWithSnapshots(apiHistory, localSnapshots);
         }
       } else {
         console.warn('⚠️ CoinGecko API returned status:', res.status);
       }
     } catch (e) {
       console.warn('⚠️ CoinGecko history fetch failed:', e);
+    }
+    
+    // If both APIs fail, at least return local snapshots
+    const localSnapshots = loadPriceSnapshots(ticker);
+    if (localSnapshots.length > 0) {
+      console.log(`📦 Using ${localSnapshots.length} local snapshots only`);
+      return localSnapshots;
     }
     
     return undefined;
@@ -242,7 +326,9 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
      if (res.ok) {
         const json = await res.json();
         if (json.Response === 'Success') {
-           return json.Data.Data.map((d: any) => [d.time * 1000, d.close]).filter((p: any) => p[1] > 0);
+           const apiHistory = json.Data.Data.map((d: any) => [d.time * 1000, d.close]).filter((p: any) => p[1] > 0);
+           const localSnapshots = loadPriceSnapshots(ticker);
+           return mergeHistoryWithSnapshots(apiHistory, localSnapshots);
         }
      }
   } catch (e) { console.warn(e); }

@@ -168,7 +168,18 @@ const App: React.FC = () => {
   };
 
   const exportPortfolio = () => {
-    const dataStr = JSON.stringify({ assets, history }, null, 2);
+    // Collect all price snapshots from localStorage
+    const snapshots: Record<string, any> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('price_snapshots_')) {
+        const ticker = key.replace('price_snapshots_', '');
+        const data = localStorage.getItem(key);
+        if (data) snapshots[ticker] = JSON.parse(data);
+      }
+    }
+    
+    const dataStr = JSON.stringify({ assets, history, priceSnapshots: snapshots }, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -186,6 +197,16 @@ const App: React.FC = () => {
         const parsed = JSON.parse(event.target?.result as string);
         if (parsed.assets) setAssets(parsed.assets);
         if (parsed.history) setHistory(parsed.history);
+        
+        // Import price snapshots
+        if (parsed.priceSnapshots) {
+          Object.entries(parsed.priceSnapshots).forEach(([ticker, snapshots]) => {
+            localStorage.setItem(`price_snapshots_${ticker}`, JSON.stringify(snapshots));
+          });
+          console.log('✅ Imported price snapshots for', Object.keys(parsed.priceSnapshots).length, 'assets');
+        }
+        
+        alert("Portfolio imported successfully!");
       } catch (err) {
         alert("Invalid portfolio file.");
       }

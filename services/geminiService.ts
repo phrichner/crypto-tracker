@@ -12,33 +12,39 @@ interface PriceResult {
 }
 
 const isContractAddress = (input: string): boolean => {
-  return input.startsWith('0x') && input.length >= 40;
+  const result = input.startsWith('0x') && input.length >= 40;
+  console.log('🔍 isContractAddress check:', { input, startsWithOx: input.startsWith('0x'), length: input.length, result });
+  return result;
 };
 
 export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<PriceResult> => {
+  console.log('🚀 fetchTokenPriceFromDex called with:', contractAddress);
+  
   try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`);
-    if (!res.ok) throw new Error('DEXScreener API failed');
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`;
+    console.log('📡 Fetching from URL:', url);
+    
+    const res = await fetch(url);
+    console.log('📥 Fetch response status:', res.status, res.ok);
+    
+    if (!res.ok) throw new Error(`DEXScreener API failed with status ${res.status}`);
     
     const data = await res.json();
-    
-    console.log('DEXScreener full response:', data);
+    console.log('✅ DEXScreener response received:', data);
     
     if (!data.pairs || data.pairs.length === 0) {
+      console.error('❌ No pairs found in response');
       throw new Error('No trading pairs found for this token');
     }
+    
+    console.log(`📊 Found ${data.pairs.length} pairs`);
     
     // Sort by liquidity USD (highest first)
     const sortedPairs = data.pairs
       .filter((pair: any) => {
         const hasPrice = pair.priceUsd && parseFloat(pair.priceUsd) > 0;
         const liquidityUsd = parseFloat(pair.liquidity?.usd || 0);
-        console.log('Checking pair:', {
-          symbol: pair.baseToken?.symbol,
-          dex: pair.dexId,
-          priceUsd: pair.priceUsd,
-          liquidityUsd: liquidityUsd
-        });
+        console.log(`  Pair: ${pair.baseToken?.symbol} on ${pair.dexId} - Price: ${pair.priceUsd}, Liquidity: $${liquidityUsd}`);
         return hasPrice;
       })
       .sort((a: any, b: any) => {
@@ -47,34 +53,45 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
         return liquidityB - liquidityA;
       });
     
+    console.log(`✅ ${sortedPairs.length} valid pairs after filtering`);
+    
     if (sortedPairs.length === 0) {
+      console.error('❌ No valid pairs after filtering');
       throw new Error('No valid trading pairs with price data found');
     }
     
     const bestPair = sortedPairs[0];
+    console.log('🎯 Selected best pair:', {
+      dex: bestPair.dexId,
+      chain: bestPair.chainId,
+      symbol: bestPair.baseToken?.symbol,
+      priceUsd: bestPair.priceUsd,
+      liquidity: bestPair.liquidity?.usd
+    });
     
-    // CRITICAL FIX: Parse priceUsd as string first, then to number
-    const priceStr = bestPair.priceUsd;
+    // Parse price - the API returns it as a string
+    const priceStr = String(bestPair.priceUsd);
     const price = parseFloat(priceStr);
     
-    console.log('Selected best pair:', {
-      symbol: bestPair.baseToken?.symbol,
-      dex: bestPair.dexId,
-      priceUsdString: priceStr,
-      priceNumber: price,
-      liquidityUsd: bestPair.liquidity?.usd
+    console.log('💰 Price parsing:', { 
+      priceString: priceStr, 
+      parsedNumber: price,
+      isValid: !isNaN(price) && price > 0
     });
     
     if (isNaN(price) || price <= 0) {
+      console.error('❌ Invalid price:', { priceStr, price });
       throw new Error(`Invalid price data: ${priceStr}`);
     }
     
     const tokenName = bestPair.baseToken?.name || 'Unknown Token';
     const tokenSymbol = bestPair.baseToken?.symbol || contractAddress.slice(0, 8);
     
+    console.log('🏷️ Token info:', { name: tokenName, symbol: tokenSymbol });
+    
     const liquidityUsdFormatted = (parseFloat(bestPair.liquidity?.usd || 0) / 1000000).toFixed(2);
     
-    return {
+    const result = {
       price,
       name: tokenName,
       symbol: tokenSymbol,
@@ -84,16 +101,26 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
       }],
       rawText: `${tokenName} (${tokenSymbol}) - $${price} from ${bestPair.dexId} on ${bestPair.chainId}`
     };
+    
+    console.log('✅ fetchTokenPriceFromDex SUCCESS:', result);
+    return result;
+    
   } catch (error: any) {
-    console.error('DEXScreener error:', error);
+    console.error('❌ fetchTokenPriceFromDex ERROR:', error);
     throw new Error(error.message || "Failed to fetch price from DEXScreener");
   }
 };
 
 export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => {
+  console.log('🔵 fetchCryptoPrice called with ticker:', ticker);
+  console.log('🔵 Ticker type:', typeof ticker, 'Length:', ticker.length);
+  
   if (isContractAddress(ticker)) {
+    console.log('✅ Detected as contract address, using DEXScreener');
     return fetchTokenPriceFromDex(ticker);
   }
+  
+  console.log('📍 Detected as ticker symbol, using Gemini AI');
   
   try {
     const apiKey = localStorage.getItem('gemini_api_key') || '';

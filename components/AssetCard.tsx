@@ -127,7 +127,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
                     return (
                       <tr key={tx.id} className="hover:bg-white/5">
                         <td className="p-2 text-slate-400">{tx.date}</td>
-                        <td className="p-2 font-mono">{tx.quantity}</td>
+                        <td className="p-2 font-mono">{tx.quantity.toLocaleString()}</td>
                         <td className="p-2 text-right font-mono">{currencyFmt.format(tx.totalCost)}</td>
                         <td className={`p-2 text-right font-mono ${txPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {txPnL >= 0 ? '+' : ''}{currencyFmt.format(txPnL)}

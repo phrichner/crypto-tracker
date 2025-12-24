@@ -377,10 +377,11 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                 </div>
             </div>
 
-            <div className="flex-1 w-full grid grid-cols-2 gap-x-6 gap-y-2">
-                 <div className="col-span-2 text-xs font-medium text-slate-400 mb-1 border-b border-slate-700 pb-1 flex justify-between">
+            <div className="flex-1 w-full grid grid-cols-1 gap-y-2">
+                 <div className="text-xs font-medium text-slate-400 mb-1 border-b border-slate-700 pb-1 grid grid-cols-3 gap-4">
                     <span>Asset Allocation</span>
-                    <span className="text-slate-500">Target Dev.</span>
+                    <span className="text-right text-slate-500">Target</span>
+                    <span className="text-right text-slate-500">Delta</span>
                  </div>
                  {pieChartData.sortedAssets.slice(0, 6).map((asset, index) => {
                     const currentPct = (asset.value / summary.totalValue) * 100;
@@ -389,18 +390,31 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                     const isSignificant = Math.abs(deviation) >= 5;
 
                     return (
-                        <div key={asset.id} className="flex items-center justify-between text-xs">
+                        <div key={asset.id} className="grid grid-cols-3 gap-4 items-center text-xs">
                              <div className="flex items-center gap-2">
-                                <div className="w-2.5 h-2.5 rounded-sm" style={{ background: CHART_COLORS[index % CHART_COLORS.length]}}></div>
-                                <span className="text-slate-200 font-medium">{asset.name || asset.ticker}</span>
+                                <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: CHART_COLORS[index % CHART_COLORS.length]}}></div>
+                                <span className="text-slate-200 font-medium truncate">{asset.name || asset.ticker}</span>
+                                <span className="text-slate-400 ml-1">{currentPct.toFixed(1)}%</span>
                              </div>
-                             <div className="flex items-center gap-3">
-                                <span className="text-slate-400">{currentPct.toFixed(1)}%</span>
-                                {target > 0 && isSignificant && (
-                                    <span className={`flex items-center gap-0.5 text-[10px] ${deviation > 0 ? 'text-amber-500' : 'text-blue-400'}`} title={`Target: ${target}%`}>
-                                        <AlertTriangle size={10} />
+                             <div className="text-right">
+                                {target > 0 ? (
+                                    <span className="text-slate-400">{target}%</span>
+                                ) : (
+                                    <span className="text-slate-600">—</span>
+                                )}
+                             </div>
+                             <div className="text-right">
+                                {target > 0 ? (
+                                    <span className={`flex items-center justify-end gap-1 ${
+                                        isSignificant 
+                                            ? (deviation > 0 ? 'text-amber-500' : 'text-blue-400')
+                                            : 'text-slate-500'
+                                    }`}>
+                                        {isSignificant && <AlertTriangle size={10} />}
                                         {deviation > 0 ? '+' : ''}{deviation.toFixed(1)}%
                                     </span>
+                                ) : (
+                                    <span className="text-slate-600">—</span>
                                 )}
                              </div>
                         </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot } from './types';
+import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag } from './types';
 import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
@@ -60,11 +60,27 @@ const migrateToPortfolios = (): Portfolio[] => {
   return [migratedPortfolio];
 };
 
+// NEW: Migrate transactions to include required tags and asset types
+const migrateTransactionTags = (portfolios: Portfolio[]): Portfolio[] => {
+  return portfolios.map(portfolio => ({
+    ...portfolio,
+    assets: portfolio.assets.map(asset => ({
+      ...asset,
+      assetType: asset.assetType || 'CRYPTO', // Default to CRYPTO
+      transactions: asset.transactions.map(tx => ({
+        ...tx,
+        tag: tx.tag || 'DCA' // Default untagged transactions to DCA
+      }))
+    }))
+  }));
+};
+
 const App: React.FC = () => {
   const [portfolios, setPortfolios] = useState<Portfolio[]>(() => {
     const saved = localStorage.getItem('portfolios');
     if (saved) {
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+      return migrateTransactionTags(parsed); // Migrate old data
     }
     // Migration or first load
     return migrateToPortfolios();
@@ -182,9 +198,26 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddAsset = async (ticker: string, quantity: number, pricePerCoin: number, date: string) => {
+  // UPDATED: Add transaction with tag support
+  const handleAddAsset = async (
+    ticker: string, 
+    quantity: number, 
+    pricePerCoin: number, 
+    date: string,
+    tag: TransactionTag,
+    customTag?: string
+  ) => {
     const totalCost = quantity * pricePerCoin;
-    const newTx: Transaction = { id: Math.random().toString(36).substr(2, 9), type: 'BUY', quantity, pricePerCoin, date, totalCost };
+    const newTx: Transaction = { 
+      id: Math.random().toString(36).substr(2, 9), 
+      type: 'BUY', 
+      quantity, 
+      pricePerCoin, 
+      date, 
+      totalCost,
+      tag,
+      customTag: tag === 'Custom' ? customTag : undefined
+    };
     const existingAsset = assets.find(a => a.ticker === ticker);
     
     if (existingAsset) {
@@ -214,7 +247,8 @@ const App: React.FC = () => {
         isUpdating: true, 
         transactions: [newTx], 
         avgBuyPrice: pricePerCoin, 
-        totalCostBasis: totalCost 
+        totalCostBasis: totalCost,
+        assetType: 'CRYPTO' // Default to CRYPTO for now (P0.3 will auto-detect)
       };
       
       updateActivePortfolio(portfolio => ({
@@ -262,6 +296,48 @@ const App: React.FC = () => {
         const newCost = updatedTxs.reduce((sum, tx) => sum + tx.totalCost, 0);
         return { ...asset, transactions: updatedTxs, quantity: newQty, totalCostBasis: newCost, avgBuyPrice: newCost / newQty };
       }).filter(a => a !== null) as Asset[]
+    }));
+  };
+
+  // NEW: Edit existing transaction (P0.2B)
+  const handleEditTransaction = (
+    assetId: string, 
+    txId: string, 
+    updates: { quantity: number; pricePerCoin: number; date: string; tag: TransactionTag; customTag?: string }
+  ) => {
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      assets: portfolio.assets.map(asset => {
+        if (asset.id !== assetId) return asset;
+        
+        const updatedTxs = asset.transactions.map(tx => {
+          if (tx.id !== txId) return tx;
+          
+          const newTotalCost = updates.quantity * updates.pricePerCoin;
+          return {
+            ...tx,
+            quantity: updates.quantity,
+            pricePerCoin: updates.pricePerCoin,
+            date: updates.date,
+            totalCost: newTotalCost,
+            tag: updates.tag,
+            customTag: updates.customTag,
+            lastEdited: new Date().toISOString()
+          };
+        });
+        
+        // Recalculate asset totals
+        const newQty = updatedTxs.reduce((sum, tx) => sum + tx.quantity, 0);
+        const newCost = updatedTxs.reduce((sum, tx) => sum + tx.totalCost, 0);
+        
+        return { 
+          ...asset, 
+          transactions: updatedTxs, 
+          quantity: newQty, 
+          totalCostBasis: newCost, 
+          avgBuyPrice: newCost / newQty 
+        };
+      })
     }));
   };
 
@@ -320,13 +396,15 @@ const App: React.FC = () => {
         const parsed = JSON.parse(event.target?.result as string);
         
         if (parsed.portfolios) {
-          setPortfolios(parsed.portfolios);
-          setActivePortfolioId(parsed.portfolios[0]?.id || '');
+          const migrated = migrateTransactionTags(parsed.portfolios);
+          setPortfolios(migrated);
+          setActivePortfolioId(migrated[0]?.id || '');
         } else if (parsed.assets) {
           // Old format - migrate
           const migratedPortfolios = migrateToPortfolios();
-          setPortfolios(migratedPortfolios);
-          setActivePortfolioId(migratedPortfolios[0].id);
+          const withTags = migrateTransactionTags(migratedPortfolios);
+          setPortfolios(withTags);
+          setActivePortfolioId(withTags[0].id);
         }
         
         if (parsed.priceSnapshots) {
@@ -512,7 +590,8 @@ const App: React.FC = () => {
                 assets: portfolio.assets.filter(a => a.id !== asset.id)
               }))} 
               onUpdate={handleUpdateAsset} 
-              onRetryHistory={() => {}} 
+              onRetryHistory={() => {}}
+              onEditTransaction={handleEditTransaction}
             />
           ))}
         </div>

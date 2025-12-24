@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Asset } from '../types';
-import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle } from 'lucide-react';
+import { Asset, TransactionTag, TAG_COLORS } from '../types';
+import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle, Edit2, Check, X, Tag } from 'lucide-react';
 
 interface AssetCardProps {
   asset: Asset;
@@ -10,10 +10,23 @@ interface AssetCardProps {
   onRefresh: (id: string) => void;
   onUpdate: (id: string, updates: Partial<Asset>) => void;
   onRetryHistory: (id: string) => void;
+  onEditTransaction: (assetId: string, txId: string, updates: { quantity: number; pricePerCoin: number; date: string; tag: TransactionTag; customTag?: string }) => void;
 }
 
-export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue, onRemove, onRemoveTransaction, onRefresh, onUpdate }) => {
+const TAG_OPTIONS: TransactionTag[] = ['DCA', 'FOMO', 'Strategic', 'Swing Trade', 'Long-term Hold', 'Dip Buy', 'Custom'];
+
+export const AssetCard: React.FC<AssetCardProps> = ({ 
+  asset, 
+  totalPortfolioValue, 
+  onRemove, 
+  onRemoveTransaction, 
+  onRefresh, 
+  onUpdate, 
+  onEditTransaction 
+}) => {
   const [showDetails, setShowDetails] = useState(false);
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ quantity: '', pricePerCoin: '', date: '', tag: 'DCA' as TransactionTag, customTag: '' });
 
   const currentTotalValue = asset.quantity * asset.currentPrice;
   const totalCost = asset.totalCostBasis;
@@ -32,6 +45,57 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
   const pctFmt = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2, signDisplay: "always" });
 
   const isContractAddress = asset.ticker.startsWith('0x') && asset.ticker.length >= 40;
+
+  const handleStartEdit = (tx: any) => {
+    setEditingTxId(tx.id);
+    setEditForm({
+      quantity: tx.quantity.toString(),
+      pricePerCoin: tx.pricePerCoin.toString(),
+      date: tx.date,
+      tag: tx.tag || 'DCA',
+      customTag: tx.customTag || ''
+    });
+  };
+
+  const handleSaveEdit = (txId: string) => {
+    const quantity = parseFloat(editForm.quantity);
+    const pricePerCoin = parseFloat(editForm.pricePerCoin);
+    
+    if (isNaN(quantity) || isNaN(pricePerCoin) || quantity <= 0 || pricePerCoin <= 0) {
+      alert('Please enter valid positive numbers');
+      return;
+    }
+
+    onEditTransaction(asset.id, txId, {
+      quantity,
+      pricePerCoin,
+      date: editForm.date,
+      tag: editForm.tag,
+      customTag: editForm.tag === 'Custom' ? editForm.customTag : undefined
+    });
+    
+    setEditingTxId(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingTxId(null);
+    setEditForm({ quantity: '', pricePerCoin: '', date: '', tag: 'DCA', customTag: '' });
+  };
+
+  const getTagDisplay = (tx: any) => {
+    const tagText = tx.tag === 'Custom' && tx.customTag ? tx.customTag : tx.tag;
+    const tagColor = TAG_COLORS[tx.tag as TransactionTag] || TAG_COLORS['Custom'];
+    
+    return (
+      <span 
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium"
+        style={{ backgroundColor: `${tagColor}20`, color: tagColor, borderColor: `${tagColor}40`, borderWidth: '1px' }}
+      >
+        <Tag size={10} />
+        {tagText}
+      </span>
+    );
+  };
 
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg relative overflow-hidden transition-all hover:border-slate-600">
@@ -108,37 +172,143 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
 
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2 flex items-center gap-1">
-              <History size={10} /> History
+              <History size={10} /> Transaction History
             </p>
-            <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-900/30 rounded border border-slate-700/50">
+            <div className="max-h-96 overflow-y-auto custom-scrollbar bg-slate-900/30 rounded border border-slate-700/50">
               <table className="w-full text-left text-[11px]">
                 <thead className="bg-slate-800/50 text-slate-400 sticky top-0">
                   <tr>
                     <th className="p-2">Date</th>
                     <th className="p-2">Qty</th>
+                    <th className="p-2 text-right">Price</th>
                     <th className="p-2 text-right">Cost</th>
                     <th className="p-2 text-right">P&L</th>
-                    <th className="p-2 w-8"></th>
+                    <th className="p-2">Tag</th>
+                    <th className="p-2 w-16"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/50 text-slate-300">
                   {asset.transactions.map((tx) => {
                     const txPnL = (tx.quantity * asset.currentPrice) - tx.totalCost;
+                    const isEditing = editingTxId === tx.id;
+                    
+                    if (isEditing) {
+                      return (
+                        <tr key={tx.id} className="bg-indigo-900/10">
+                          <td className="p-2">
+                            <input
+                              type="date"
+                              value={editForm.date}
+                              onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[11px] text-white [color-scheme:dark]"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              step="any"
+                              value={editForm.quantity}
+                              onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[11px] text-white font-mono"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              step="any"
+                              value={editForm.pricePerCoin}
+                              onChange={(e) => setEditForm({ ...editForm, pricePerCoin: e.target.value })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[11px] text-white font-mono text-right"
+                            />
+                          </td>
+                          <td className="p-2 text-right font-mono text-slate-400">
+                            {currencyFmt.format((parseFloat(editForm.quantity) || 0) * (parseFloat(editForm.pricePerCoin) || 0))}
+                          </td>
+                          <td className="p-2 text-right">-</td>
+                          <td className="p-2">
+                            <select
+                              value={editForm.tag}
+                              onChange={(e) => setEditForm({ ...editForm, tag: e.target.value as TransactionTag })}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[10px] text-white"
+                              style={{ color: TAG_COLORS[editForm.tag] }}
+                            >
+                              {TAG_OPTIONS.map(tagOption => (
+                                <option key={tagOption} value={tagOption} style={{ color: TAG_COLORS[tagOption] }}>
+                                  {tagOption}
+                                </option>
+                              ))}
+                            </select>
+                            {editForm.tag === 'Custom' && (
+                              <input
+                                type="text"
+                                value={editForm.customTag}
+                                onChange={(e) => setEditForm({ ...editForm, customTag: e.target.value })}
+                                placeholder="Custom tag..."
+                                className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[10px] text-white mt-1"
+                                maxLength={20}
+                              />
+                            )}
+                          </td>
+                          <td className="p-2 text-right">
+                            <div className="flex gap-1">
+                              <button 
+                                onClick={() => handleSaveEdit(tx.id)} 
+                                className="text-emerald-400 hover:text-emerald-300 transition-colors p-1 rounded hover:bg-emerald-400/10"
+                                title="Save"
+                              >
+                                <Check size={14} />
+                              </button>
+                              <button 
+                                onClick={handleCancelEdit} 
+                                className="text-slate-400 hover:text-slate-300 transition-colors p-1 rounded hover:bg-slate-400/10"
+                                title="Cancel"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    
                     return (
-                      <tr key={tx.id} className="hover:bg-white/5">
-                        <td className="p-2 text-slate-400">{tx.date}</td>
+                      <tr key={tx.id} className="hover:bg-white/5 group">
+                        <td className="p-2 text-slate-400">
+                          <div className="flex flex-col">
+                            <span>{tx.date}</span>
+                            {tx.lastEdited && (
+                              <span className="text-[9px] text-slate-600 flex items-center gap-1" title={`Last edited: ${new Date(tx.lastEdited).toLocaleString()}`}>
+                                <Edit2 size={8} /> edited
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td className="p-2 font-mono">{tx.quantity.toLocaleString()}</td>
+                        <td className="p-2 text-right font-mono">{currencyFmt.format(tx.pricePerCoin)}</td>
                         <td className="p-2 text-right font-mono">{currencyFmt.format(tx.totalCost)}</td>
                         <td className={`p-2 text-right font-mono ${txPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {txPnL >= 0 ? '+' : ''}{currencyFmt.format(txPnL)}
                         </td>
+                        <td className="p-2">
+                          {getTagDisplay(tx)}
+                        </td>
                         <td className="p-2 text-right">
-                          <button 
-                            onClick={() => onRemoveTransaction(asset.id, tx.id)} 
-                            className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-400/10"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => handleStartEdit(tx)} 
+                              className="text-slate-500 hover:text-indigo-400 transition-colors p-1 rounded hover:bg-indigo-400/10"
+                              title="Edit transaction"
+                            >
+                              <Edit2 size={12} />
+                            </button>
+                            <button 
+                              onClick={() => onRemoveTransaction(asset.id, tx.id)} 
+                              className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-400/10"
+                              title="Delete transaction"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

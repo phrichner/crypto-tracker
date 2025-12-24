@@ -217,7 +217,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 pb-20">
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-screen-2xl mx-auto px-8 px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-indigo-600 p-2 rounded-lg"><Wallet className="text-white" size={24} /></div>
             <h1 className="text-xl font-bold text-white">Portfolio Tracker</h1>
@@ -257,7 +257,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="max-w-screen-2xl mx-auto px-8 py-8">
         <Summary summary={summary} assets={assets} onRefreshAll={handleRefreshAll} isGlobalLoading={isLoading} />
         <AddAssetForm onAdd={handleAddAsset} isGlobalLoading={isLoading} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

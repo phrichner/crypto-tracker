@@ -80,6 +80,17 @@ const mergeHistoryWithSnapshots = (apiHistory: [number, number][], localSnapshot
   return deduped;
 };
 
+// NEW: Save historical data to localStorage
+const saveHistoricalData = (ticker: string, historyData: [number, number][]) => {
+  try {
+    const key = `price_snapshots_${ticker}`;
+    localStorage.setItem(key, JSON.stringify(historyData));
+    console.log(`💾 Saved ${historyData.length} historical data points for ${ticker}`);
+  } catch (e) {
+    console.warn('Failed to save historical data:', e);
+  }
+};
+
 export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<PriceResult> => {
   console.log('🚀 fetchTokenPriceFromDex called with:', contractAddress);
   
@@ -265,14 +276,20 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
               if (priceRatio >= 0.5 && priceRatio <= 2.0) {
                 console.log(`✅ CryptoCompare has ${historyData.length} days - using it!`);
                 const localSnapshots = loadPriceSnapshots(ticker);
-                return mergeHistoryWithSnapshots(historyData, localSnapshots);
+                const merged = mergeHistoryWithSnapshots(historyData, localSnapshots);
+                // **SAVE HISTORICAL DATA**
+                saveHistoricalData(ticker, merged);
+                return merged;
               } else {
                 console.warn(`⚠️ Price mismatch - trying CoinGecko instead`);
               }
             } else {
               console.log(`✅ CryptoCompare has ${historyData.length} days - using it (no price verification)`);
               const localSnapshots = loadPriceSnapshots(ticker);
-              return mergeHistoryWithSnapshots(historyData, localSnapshots);
+              const merged = mergeHistoryWithSnapshots(historyData, localSnapshots);
+              // **SAVE HISTORICAL DATA**
+              saveHistoricalData(ticker, merged);
+              return merged;
             }
           } else {
             console.log(`⚠️ CryptoCompare only has ${historyData.length} days (< 365) - trying CoinGecko for better coverage`);
@@ -301,7 +318,10 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
         if (json.prices && json.prices.length > 0) {
           const apiHistory = json.prices.filter((p: any) => p[1] > 0);
           const localSnapshots = loadPriceSnapshots(ticker);
-          return mergeHistoryWithSnapshots(apiHistory, localSnapshots);
+          const merged = mergeHistoryWithSnapshots(apiHistory, localSnapshots);
+          // **SAVE HISTORICAL DATA**
+          saveHistoricalData(ticker, merged);
+          return merged;
         }
       } else {
         console.warn('⚠️ CoinGecko API returned status:', res.status);
@@ -328,7 +348,10 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
         if (json.Response === 'Success') {
            const apiHistory = json.Data.Data.map((d: any) => [d.time * 1000, d.close]).filter((p: any) => p[1] > 0);
            const localSnapshots = loadPriceSnapshots(ticker);
-           return mergeHistoryWithSnapshots(apiHistory, localSnapshots);
+           const merged = mergeHistoryWithSnapshots(apiHistory, localSnapshots);
+           // **SAVE HISTORICAL DATA**
+           saveHistoricalData(ticker, merged);
+           return merged;
         }
      }
   } catch (e) { console.warn(e); }

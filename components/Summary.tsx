@@ -20,7 +20,7 @@ interface ChartDataPoint {
   costBasis: number;
   marketValue: number;
   stack: Record<string, number>;
-  costStack: Record<string, number>; // New: Track cost basis per asset per point
+  costStack: Record<string, number>;
 }
 
 export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll, isGlobalLoading }) => {
@@ -51,7 +51,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
   const isProfit = summary.totalPnL >= 0;
 
-  // --- Stacked Area Chart Logic (Hybrid: Real History + Interpolation) ---
+  // --- Stacked Area Chart Logic ---
   const { Chart, xAxisLabels, yAxisLabels, chartData, maxY } = useMemo(() => {
     const now = Date.now();
     let minTime = now;
@@ -66,7 +66,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
       });
     });
 
-    // If no transactions, default to 24h ago
     if (assets.length === 0 || firstTxTimestamp === now) {
       firstTxTimestamp = now - (24 * 60 * 60 * 1000);
     }
@@ -79,44 +78,16 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
       minTime = now - (30 * 24 * 60 * 60 * 1000);
     } else if (timeRange === 'ALL') {
       minTime = firstTxTimestamp;
-      // Add a tiny buffer before the first tx so it doesn't start exactly on the axis edge
       minTime = minTime - (minTime * 0.00001); 
     } else if (timeRange === 'CUSTOM' && customStart) {
       minTime = new Date(customStart).getTime();
       maxTime = customEnd ? new Date(customEnd).getTime() : now;
     }
 
-    // Ensure minTime is strictly less than maxTime
     if (minTime >= maxTime) minTime = maxTime - (24 * 60 * 60 * 1000);
 
-    // 2. Build Price Anchors for each Asset (Fallback if no history)
-    const priceAnchors: Record<string, { time: number, price: number }[]> = {};
-    
-    assets.forEach(asset => {
-      // If we DON'T have real history, build simple anchors
-      if (!asset.priceHistory || asset.priceHistory.length === 0) {
-        const anchors = asset.transactions.map(tx => ({
-          time: new Date(tx.date).getTime(),
-          price: tx.pricePerCoin
-        }));
-        anchors.push({ time: now, price: asset.currentPrice });
-        anchors.sort((a, b) => a.time - b.time);
-        
-        const uniqueAnchors = [];
-        if (anchors.length > 0) {
-          uniqueAnchors.push(anchors[0]);
-          for (let i = 1; i < anchors.length; i++) {
-            if (anchors[i].time > anchors[i-1].time) {
-              uniqueAnchors.push(anchors[i]);
-            }
-          }
-        }
-        priceAnchors[asset.id] = uniqueAnchors;
-      }
-    });
-
-    // 3. Generate Time Steps
-    const steps = 150; // Resolution
+    // 2. Generate Time Steps
+    const steps = 150;
     const stepSize = (maxTime - minTime) / steps;
     const generatedData: ChartDataPoint[] = [];
 
@@ -150,54 +121,54 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
             costStack[asset.id] = costAtTime;
 
-            // B. Find Price at time t
+            // B. Find Price at time t - SIMPLIFIED LOGIC
             let estimatedPrice = asset.currentPrice;
 
             if (asset.priceHistory && asset.priceHistory.length > 0) {
-                // --- STRATEGY 1: REAL HISTORY ---
-                const assetHistory = asset.priceHistory; // Renamed to avoid shadowing prop
-                const idx = assetHistory.findIndex(p => p[0] >= t);
+                const history = asset.priceHistory;
                 
-                if (idx === 0) {
-                   estimatedPrice = assetHistory[0][1];
-                } else if (idx === -1) {
-                   // t is newer than last history point, use last known
-                   estimatedPrice = assetHistory[assetHistory.length - 1][1];
-                } else {
-                   // Interpolate between idx-1 and idx
-                   const p1 = assetHistory[idx-1];
-                   const p2 = assetHistory[idx];
-                   const span = p2[0] - p1[0];
-                   if (span > 0) {
-                      const progress = (t - p1[0]) / span;
-                      estimatedPrice = p1[1] + (p2[1] - p1[1]) * progress;
-                   } else {
-                      estimatedPrice = p1[1];
-                   }
+                // BEFORE first historical data point - use first purchase price
+                if (t < history[0][0]) {
+                    const sortedTxs = asset.transactions
+                        .slice()
+                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                    estimatedPrice = sortedTxs[0]?.pricePerCoin || asset.avgBuyPrice;
                 }
-
-            } else {
-                // --- STRATEGY 2: ANCHOR FALLBACK ---
-                const anchors = priceAnchors[asset.id] || [];
-                if (anchors.length > 0) {
-                   if (t <= anchors[0].time) estimatedPrice = anchors[0].price;
-                   else if (t >= anchors[anchors.length - 1].time) estimatedPrice = anchors[anchors.length - 1].price;
-                   else {
-                     for (let k = 0; k < anchors.length - 1; k++) {
-                        if (t >= anchors[k].time && t <= anchors[k+1].time) {
-                           const prev = anchors[k];
-                           const next = anchors[k+1];
-                           const timeSpan = next.time - prev.time;
-                           if (timeSpan > 0) {
-                              const progress = (t - prev.time) / timeSpan;
-                              estimatedPrice = prev.price + (next.price - prev.price) * progress;
-                           } else {
-                              estimatedPrice = prev.price;
-                           }
-                           break;
+                // AFTER last historical data point - use current price
+                else if (t >= history[history.length - 1][0]) {
+                    estimatedPrice = asset.currentPrice;
+                }
+                // BETWEEN data points - interpolate
+                else {
+                    const idx = history.findIndex(p => p[0] >= t);
+                    
+                    if (idx === 0) {
+                        estimatedPrice = history[0][1];
+                    } else if (idx === -1) {
+                        estimatedPrice = history[history.length - 1][1];
+                    } else {
+                        const p1 = history[idx - 1];
+                        const p2 = history[idx];
+                        const span = p2[0] - p1[0];
+                        if (span > 0) {
+                            const progress = (t - p1[0]) / span;
+                            estimatedPrice = p1[1] + (p2[1] - p1[1]) * progress;
+                        } else {
+                            estimatedPrice = p1[1];
                         }
-                     }
-                   }
+                    }
+                }
+            } else {
+                // No historical data - use purchase price before now, current price after
+                const sortedTxs = asset.transactions
+                    .slice()
+                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                const firstPurchaseTime = new Date(sortedTxs[0]?.date || now).getTime();
+                
+                if (t < firstPurchaseTime) {
+                    estimatedPrice = sortedTxs[0]?.pricePerCoin || asset.avgBuyPrice;
+                } else {
+                    estimatedPrice = asset.currentPrice;
                 }
             }
 
@@ -211,12 +182,12 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
             timestamp: t,
             costBasis: totalCost,
             marketValue: totalVal,
-            stack, // breakdown of value
-            costStack // breakdown of cost
+            stack,
+            costStack
         });
     }
 
-    // 4. Render SVG
+    // 3. Render SVG
     const width = 100;
     const height = 100;
 
@@ -226,7 +197,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
         if (d.costBasis > computedMaxY) computedMaxY = d.costBasis;
     });
     if (computedMaxY === 0) computedMaxY = 100;
-    computedMaxY = computedMaxY * 1.1; // 10% padding
+    computedMaxY = computedMaxY * 1.1;
 
     const getX = (ts: number) => ((ts - minTime) / (maxTime - minTime)) * width;
     const getY = (val: number) => height - ((val / computedMaxY) * height);
@@ -238,29 +209,24 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
     assets.forEach((asset, idx) => {
         const color = CHART_COLORS[idx % CHART_COLORS.length];
         
-        // Check if asset actually has value in this window
         const hasValue = generatedData.some(d => (d.stack[asset.id] || 0) > 0);
         if (!hasValue) return;
 
-        // Top line points
         const topPoints = generatedData.map((d, i) => {
             const val = d.stack[asset.id] || 0;
             const yTop = currentBaselines[i] + val;
             return { x: getX(d.timestamp), y: getY(yTop), val: yTop };
         });
 
-        // Bottom line points (reverse)
         const bottomPoints = generatedData.map((d, i) => {
             const yBottom = currentBaselines[i];
             return { x: getX(d.timestamp), y: getY(yBottom) };
         }).reverse();
 
-        // Update baselines
         topPoints.forEach((p, i) => {
             currentBaselines[i] = p.val; 
         });
 
-        // Construct Path D
         if (topPoints.length > 1) {
              let d = `M ${topPoints[0].x.toFixed(2)},${topPoints[0].y.toFixed(2)}`;
              for (let i = 1; i < topPoints.length; i++) d += ` L ${topPoints[i].x.toFixed(2)},${topPoints[i].y.toFixed(2)}`;
@@ -286,20 +252,14 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
     const FinalChart = (
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
-         {/* Grid */}
          {[0, 0.25, 0.5, 0.75, 1].map(p => (
             <line key={p} x1="0" y1={height * p} x2={width} y2={height * p} stroke="#334155" strokeWidth="0.2" strokeDasharray="2 2" />
          ))}
-
-         {/* Stacked Areas */}
          {stackedPaths}
-
-         {/* Cost Basis Line (Dashed White) */}
          <path d={costPathD} fill="none" stroke="white" strokeWidth="0.8" strokeDasharray="2 1" strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
       </svg>
     );
 
-    // Labels
     const xLabels = [0, 0.5, 1].map(p => {
         const t = minTime + ((maxTime - minTime) * p);
         const date = new Date(t);
@@ -317,11 +277,10 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
        };
     });
 
-    return { Chart: FinalChart, xAxisLabels: xLabels, yAxisLabels: yLabels, chartData: generatedData, minTime, maxTime, maxY: computedMaxY };
+    return { Chart: FinalChart, xAxisLabels: xLabels, yAxisLabels: yLabels, chartData: generatedData, maxY: computedMaxY };
 
   }, [assets, timeRange, customStart, customEnd]);
 
-  // --- Hover Logic ---
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     if (!chartContainerRef.current || chartData.length === 0) return;
     
@@ -337,8 +296,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
     if (width === 0) return;
 
     const ratio = Math.max(0, Math.min(1, x / width));
-    
-    // Find index directly from ratio
     const index = Math.floor(ratio * (chartData.length - 1));
     const dataPoint = chartData[index];
 
@@ -353,8 +310,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
   const handleMouseLeave = () => setHoverData(null);
 
-
-  // --- Pie Chart Logic ---
   const pieChartData = useMemo(() => {
     if (summary.totalValue === 0) return { gradient: `conic-gradient(#334155 0% 100%)`, sortedAssets: [] };
     
@@ -377,14 +332,11 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
     };
   }, [summary.totalValue, assets]);
 
-
   return (
     <div className="space-y-4 mb-8">
       
-      {/* Top Row */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
         
-        {/* Net Worth Card */}
         <div className="col-span-1 md:col-span-4 bg-gradient-to-br from-indigo-600 to-indigo-900 rounded-xl p-6 shadow-lg text-white flex flex-col justify-between min-h-[180px]">
             <div>
               <div className="flex items-center justify-between mb-4">
@@ -414,7 +366,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
             </div>
         </div>
 
-        {/* Allocation Card */}
         <div className="col-span-1 md:col-span-8 bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg flex flex-col md:flex-row items-center gap-6 min-h-[180px]">
             <div className="relative w-32 h-32 flex-shrink-0">
                 <div 
@@ -459,7 +410,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
         </div>
       </div>
 
-      {/* Bottom Row: History Graph */}
       <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg">
           <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-4">
               <div className="text-sm font-medium text-slate-300">Portfolio History</div>
@@ -486,7 +436,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
               </div>
           </div>
           
-          {/* Graph Area */}
           <div className="relative">
              <div className="absolute left-0 top-0 bottom-6 w-10 flex flex-col justify-between text-[9px] text-slate-500 pointer-events-none py-2 text-right pr-1 z-10">
                 {yAxisLabels.map((lbl, i) => (
@@ -505,7 +454,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                     {Chart}
                 </div>
 
-                {/* Hover Tooltip */}
                 {hoverData && (
                    <>
                       <div className="absolute top-0 bottom-0 w-px bg-white/40 pointer-events-none z-20" style={{ left: hoverData.x }} />
@@ -513,8 +461,8 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                         className="absolute bg-slate-800/95 border border-slate-600 rounded p-4 shadow-2xl z-30 min-w-[280px] backdrop-blur tooltip-container"
                         style={{ 
                           left: hoverData.x > ((chartContainerRef.current?.offsetWidth || 300) / 2) 
-                            ? Math.max(0, hoverData.x - 280 - 20)  // Right side: show tooltip on left
-                            : Math.min(hoverData.x + 20, (chartContainerRef.current?.offsetWidth || 300) - 280), // Left side: show tooltip on right
+                            ? Math.max(0, hoverData.x - 280 - 20)
+                            : Math.min(hoverData.x + 20, (chartContainerRef.current?.offsetWidth || 300) - 280),
                           top: 20,
                           pointerEvents: 'none'
                         }}
@@ -538,7 +486,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                             </div>
                          </div>
 
-                         {/* Breakdown of Top Assets at this timestamp */}
                          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Holding Breakdown</div>
                          <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar">
                             {assets
@@ -578,7 +525,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                    </>
                 )}
                 
-                {/* X-Axis Labels */}
                 <div className="absolute bottom-0 left-0 right-0 h-6 flex justify-between px-2 pointer-events-none">
                     {xAxisLabels.map((lbl, i) => (
                         <span 

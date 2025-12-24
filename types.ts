@@ -10,6 +10,7 @@ export interface Transaction {
   pricePerCoin: number;
   date: string;
   totalCost: number;
+  tag?: string; // NEW: Transaction tags for analytics
 }
 
 export interface Asset {
@@ -22,21 +23,30 @@ export interface Asset {
   sources: SourceLink[];
   isUpdating: boolean;
   error?: string;
-  // New fields for P&L
   transactions: Transaction[];
   avgBuyPrice: number;
   totalCostBasis: number;
-  // New field for Historical Data
   coinGeckoId?: string;
-  priceHistory?: number[][]; // Array of [timestamp, price]
-  // New field for Target Allocation
-  targetAllocation?: number; // Percentage (0-100)
+  priceHistory?: number[][];
+  targetAllocation?: number;
 }
 
 export interface HistorySnapshot {
   timestamp: number;
   totalValue: number;
-  assetValues: Record<string, number>; // ticker -> value at that time
+  assetValues: Record<string, number>;
+}
+
+export interface Portfolio {
+  id: string;
+  name: string;
+  color: string; // For visual distinction
+  assets: Asset[];
+  history: HistorySnapshot[];
+  settings: {
+    // Future settings can go here
+  };
+  createdAt: string;
 }
 
 export interface PortfolioSummary {

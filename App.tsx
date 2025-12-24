@@ -1,27 +1,90 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Asset, PortfolioSummary, Transaction, HistorySnapshot } from './types';
+import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot } from './types';
 import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
 import { Summary } from './components/Summary';
 import { ApiKeySettings } from './components/ApiKeySettings';
-import { Wallet, Download, Upload, Settings, Key } from 'lucide-react';
+import { PortfolioManager } from './components/PortfolioManager';
+import { Wallet, Download, Upload, Settings, Key, FolderOpen } from 'lucide-react';
+
+// Portfolio colors for visual distinction
+const PORTFOLIO_COLORS = [
+  '#6366f1', // Indigo
+  '#10b981', // Emerald
+  '#f59e0b', // Amber
+  '#ec4899', // Pink
+  '#8b5cf6', // Purple
+  '#06b6d4', // Cyan
+  '#f43f5e', // Rose
+  '#14b8a6', // Teal
+];
+
+// Migration: Convert old structure to new portfolio structure
+const migrateToPortfolios = (): Portfolio[] => {
+  const oldAssets = localStorage.getItem('portfolio_assets');
+  const oldHistory = localStorage.getItem('portfolio_history');
+  
+  if (!oldAssets && !oldHistory) {
+    // No old data, return default empty portfolio
+    return [{
+      id: Math.random().toString(36).substr(2, 9),
+      name: 'Main Portfolio',
+      color: PORTFOLIO_COLORS[0],
+      assets: [],
+      history: [],
+      settings: {},
+      createdAt: new Date().toISOString()
+    }];
+  }
+  
+  // Migrate old data to new structure
+  const assets: Asset[] = oldAssets ? JSON.parse(oldAssets) : [];
+  const history: HistorySnapshot[] = oldHistory ? JSON.parse(oldHistory) : [];
+  
+  const migratedPortfolio: Portfolio = {
+    id: Math.random().toString(36).substr(2, 9),
+    name: 'Main Portfolio',
+    color: PORTFOLIO_COLORS[0],
+    assets,
+    history,
+    settings: {},
+    createdAt: new Date().toISOString()
+  };
+  
+  // Clean up old keys
+  localStorage.removeItem('portfolio_assets');
+  localStorage.removeItem('portfolio_history');
+  
+  console.log('✅ Migrated old portfolio data to new structure');
+  return [migratedPortfolio];
+};
 
 const App: React.FC = () => {
-  const [assets, setAssets] = useState<Asset[]>(() => {
-    const saved = localStorage.getItem('portfolio_assets');
-    return saved ? JSON.parse(saved) : [];
+  const [portfolios, setPortfolios] = useState<Portfolio[]>(() => {
+    const saved = localStorage.getItem('portfolios');
+    if (saved) {
+      return JSON.parse(saved);
+    }
+    // Migration or first load
+    return migrateToPortfolios();
   });
 
-  const [history, setHistory] = useState<HistorySnapshot[]>(() => {
-    const saved = localStorage.getItem('portfolio_history');
-    return saved ? JSON.parse(saved) : [];
+  const [activePortfolioId, setActivePortfolioId] = useState<string>(() => {
+    const saved = localStorage.getItem('active_portfolio_id');
+    return saved || portfolios[0]?.id || '';
   });
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isPortfolioManagerOpen, setIsPortfolioManagerOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Get active portfolio
+  const activePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
+  const assets = activePortfolio?.assets || [];
+  const history = activePortfolio?.history || [];
 
   useEffect(() => {
     const checkApiKey = () => {
@@ -32,6 +95,16 @@ const App: React.FC = () => {
     window.addEventListener('storage', checkApiKey);
     return () => window.removeEventListener('storage', checkApiKey);
   }, [isSettingsOpen]);
+
+  // Save portfolios to localStorage
+  useEffect(() => {
+    localStorage.setItem('portfolios', JSON.stringify(portfolios));
+  }, [portfolios]);
+
+  // Save active portfolio ID
+  useEffect(() => {
+    localStorage.setItem('active_portfolio_id', activePortfolioId);
+  }, [activePortfolioId]);
 
   const summary: PortfolioSummary = assets.reduce((acc, asset) => {
     const assetValue = asset.quantity * asset.currentPrice;
@@ -51,8 +124,11 @@ const App: React.FC = () => {
     summary.totalPnLPercent = (summary.totalPnL / summary.totalCostBasis) * 100;
   }
 
-  useEffect(() => localStorage.setItem('portfolio_assets', JSON.stringify(assets)), [assets]);
-  useEffect(() => localStorage.setItem('portfolio_history', JSON.stringify(history)), [history]);
+  const updateActivePortfolio = (updater: (portfolio: Portfolio) => Portfolio) => {
+    setPortfolios(prev => prev.map(p => 
+      p.id === activePortfolioId ? updater(p) : p
+    ));
+  };
 
   const recordHistorySnapshot = useCallback((currentAssets: Asset[]) => {
     const totalValue = currentAssets.reduce((sum, a) => sum + (a.quantity * a.currentPrice), 0);
@@ -62,34 +138,47 @@ const App: React.FC = () => {
       totalValue,
       assetValues: currentAssets.reduce((acc, a) => ({ ...acc, [a.ticker]: a.quantity * a.currentPrice }), {})
     };
-    setHistory(prev => {
-      const newHistory = [...prev, snapshot];
-      return newHistory.length > 200 ? newHistory.slice(newHistory.length - 200) : newHistory;
-    });
-  }, []);
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      history: [...portfolio.history, snapshot].slice(-200) // Keep last 200
+    }));
+  }, [activePortfolioId]);
 
   const handleUpdateAsset = (id: string, updates: Partial<Asset>) => {
-    setAssets(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      assets: portfolio.assets.map(a => a.id === id ? { ...a, ...updates } : a)
+    }));
   };
 
   const handleRefreshAsset = async (id: string) => {
     const asset = assets.find(a => a.id === id);
     if (!asset) return;
     
-    setAssets(prev => prev.map(a => a.id === id ? { ...a, isUpdating: true } : a));
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      assets: portfolio.assets.map(a => a.id === id ? { ...a, isUpdating: true } : a)
+    }));
+    
     try {
       const result = await fetchCryptoPrice(asset.ticker);
-      setAssets(prev => prev.map(a => a.id === id ? { 
-        ...a, 
-        currentPrice: result.price, 
-        sources: result.sources, 
-        lastUpdated: new Date().toISOString(),
-        isUpdating: false,
-        error: undefined,
-        name: result.name || result.symbol || a.name
-      } : a));
+      updateActivePortfolio(portfolio => ({
+        ...portfolio,
+        assets: portfolio.assets.map(a => a.id === id ? { 
+          ...a, 
+          currentPrice: result.price, 
+          sources: result.sources, 
+          lastUpdated: new Date().toISOString(),
+          isUpdating: false,
+          error: undefined,
+          name: result.name || result.symbol || a.name
+        } : a)
+      }));
     } catch (error: any) {
-       setAssets(prev => prev.map(a => a.id === id ? { ...a, isUpdating: false, error: error.message || 'Failed' } : a));
+      updateActivePortfolio(portfolio => ({
+        ...portfolio,
+        assets: portfolio.assets.map(a => a.id === id ? { ...a, isUpdating: false, error: error.message || 'Failed' } : a)
+      }));
     }
   };
 
@@ -102,9 +191,16 @@ const App: React.FC = () => {
       const updatedTransactions = [...existingAsset.transactions, newTx];
       const newTotalQty = existingAsset.quantity + quantity;
       const newTotalCostBasis = existingAsset.totalCostBasis + totalCost;
-      setAssets(prev => prev.map(a => a.id === existingAsset.id ? { 
-        ...a, quantity: newTotalQty, transactions: updatedTransactions, totalCostBasis: newTotalCostBasis, avgBuyPrice: newTotalCostBasis / newTotalQty 
-      } : a));
+      updateActivePortfolio(portfolio => ({
+        ...portfolio,
+        assets: portfolio.assets.map(a => a.id === existingAsset.id ? { 
+          ...a, 
+          quantity: newTotalQty, 
+          transactions: updatedTransactions, 
+          totalCostBasis: newTotalCostBasis, 
+          avgBuyPrice: newTotalCostBasis / newTotalQty 
+        } : a)
+      }));
     } else {
       const newId = Math.random().toString(36).substr(2, 9);
       const tempAsset: Asset = { 
@@ -120,35 +216,53 @@ const App: React.FC = () => {
         avgBuyPrice: pricePerCoin, 
         totalCostBasis: totalCost 
       };
-      setAssets(prev => [...prev, tempAsset]);
+      
+      updateActivePortfolio(portfolio => ({
+        ...portfolio,
+        assets: [...portfolio.assets, tempAsset]
+      }));
+      
       try {
         const result = await fetchCryptoPrice(ticker);
-        setAssets(prev => prev.map(a => a.id === newId ? { 
-          ...a, 
-          currentPrice: result.price, 
-          sources: result.sources, 
-          isUpdating: false,
-          name: result.name || result.symbol || a.name
-        } : a));
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a => a.id === newId ? { 
+            ...a, 
+            currentPrice: result.price, 
+            sources: result.sources, 
+            isUpdating: false,
+            name: result.name || result.symbol || a.name
+          } : a)
+        }));
+        
         const historyData = await fetchAssetHistory(ticker, result.price, result.symbol);
-        if (historyData) setAssets(prev => prev.map(a => a.id === newId ? { ...a, priceHistory: historyData } : a));
+        if (historyData) {
+          updateActivePortfolio(portfolio => ({
+            ...portfolio,
+            assets: portfolio.assets.map(a => a.id === newId ? { ...a, priceHistory: historyData } : a)
+          }));
+        }
       } catch (error: any) {
-         setAssets(prev => prev.map(a => a.id === newId ? { ...a, isUpdating: false, error: error.message || 'Failed' } : a));
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a => a.id === newId ? { ...a, isUpdating: false, error: error.message || 'Failed' } : a)
+        }));
       }
     }
   };
 
   const handleRemoveTransaction = (assetId: string, txId: string) => {
-    setAssets(prev => {
-      return prev.map(asset => {
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      assets: portfolio.assets.map(asset => {
         if (asset.id !== assetId) return asset;
         const updatedTxs = asset.transactions.filter(tx => tx.id !== txId);
         if (updatedTxs.length === 0) return null;
         const newQty = updatedTxs.reduce((sum, tx) => sum + tx.quantity, 0);
         const newCost = updatedTxs.reduce((sum, tx) => sum + tx.totalCost, 0);
         return { ...asset, transactions: updatedTxs, quantity: newQty, totalCostBasis: newCost, avgBuyPrice: newCost / newQty };
-      }).filter(a => a !== null) as Asset[];
-    });
+      }).filter(a => a !== null) as Asset[]
+    }));
   };
 
   const handleRefreshAll = async () => {
@@ -159,7 +273,10 @@ const App: React.FC = () => {
       try {
         const res = await fetchCryptoPrice(updated[i].ticker);
         updated[i] = { ...updated[i], currentPrice: res.price, lastUpdated: new Date().toISOString(), name: res.name || res.symbol || updated[i].name };
-        setAssets([...updated]);
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: [...updated]
+        }));
         await delay(300);
       } catch (e) {}
     }
@@ -168,7 +285,7 @@ const App: React.FC = () => {
   };
 
   const exportPortfolio = () => {
-    // Collect all price snapshots from localStorage
+    // Export ALL portfolios + price snapshots
     const snapshots: Record<string, any> = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -179,7 +296,7 @@ const App: React.FC = () => {
       }
     }
     
-    const dataStr = JSON.stringify({ assets, history, priceSnapshots: snapshots }, null, 2);
+    const dataStr = JSON.stringify({ portfolios, priceSnapshots: snapshots }, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -195,15 +312,21 @@ const App: React.FC = () => {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target?.result as string);
-        if (parsed.assets) setAssets(parsed.assets);
-        if (parsed.history) setHistory(parsed.history);
         
-        // Import price snapshots
+        if (parsed.portfolios) {
+          setPortfolios(parsed.portfolios);
+          setActivePortfolioId(parsed.portfolios[0]?.id || '');
+        } else if (parsed.assets) {
+          // Old format - migrate
+          const migratedPortfolios = migrateToPortfolios();
+          setPortfolios(migratedPortfolios);
+          setActivePortfolioId(migratedPortfolios[0].id);
+        }
+        
         if (parsed.priceSnapshots) {
           Object.entries(parsed.priceSnapshots).forEach(([ticker, snapshots]) => {
             localStorage.setItem(`price_snapshots_${ticker}`, JSON.stringify(snapshots));
           });
-          console.log('✅ Imported price snapshots for', Object.keys(parsed.priceSnapshots).length, 'assets');
         }
         
         alert("Portfolio imported successfully!");
@@ -214,31 +337,90 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
+  // Portfolio management functions
+  const handleCreatePortfolio = (name: string) => {
+    const newPortfolio: Portfolio = {
+      id: Math.random().toString(36).substr(2, 9),
+      name,
+      color: PORTFOLIO_COLORS[portfolios.length % PORTFOLIO_COLORS.length],
+      assets: [],
+      history: [],
+      settings: {},
+      createdAt: new Date().toISOString()
+    };
+    setPortfolios([...portfolios, newPortfolio]);
+    setActivePortfolioId(newPortfolio.id);
+  };
+
+  const handleRenamePortfolio = (id: string, newName: string) => {
+    setPortfolios(prev => prev.map(p => 
+      p.id === id ? { ...p, name: newName } : p
+    ));
+  };
+
+  const handleDeletePortfolio = (id: string) => {
+    if (portfolios.length === 1) {
+      alert("Cannot delete the last portfolio!");
+      return;
+    }
+    
+    const portfolio = portfolios.find(p => p.id === id);
+    if (portfolio && portfolio.assets.length > 0) {
+      const confirmed = window.confirm(
+        `"${portfolio.name}" contains ${portfolio.assets.length} asset(s). Are you sure you want to delete it? This will be saved in your next backup.`
+      );
+      if (!confirmed) return;
+    }
+    
+    setPortfolios(prev => prev.filter(p => p.id !== id));
+    if (activePortfolioId === id) {
+      setActivePortfolioId(portfolios.find(p => p.id !== id)?.id || '');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 pb-20">
       <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-screen-2xl mx-auto px-8 px-4 py-4 flex items-center justify-between">
+        <div className="max-w-screen-2xl mx-auto px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-indigo-600 p-2 rounded-lg"><Wallet className="text-white" size={24} /></div>
             <h1 className="text-xl font-bold text-white">Portfolio Tracker</h1>
+            {activePortfolio && (
+              <div 
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/50"
+                style={{ borderLeftColor: activePortfolio.color, borderLeftWidth: '3px' }}
+              >
+                <FolderOpen size={16} style={{ color: activePortfolio.color }} />
+                <span className="text-sm font-medium" style={{ color: activePortfolio.color }}>
+                  {activePortfolio.name}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
-             <button 
-               onClick={() => setIsSettingsOpen(true)} 
-               className={`p-2 rounded-lg transition-colors ${hasApiKey ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300 animate-pulse'}`}
-               title={hasApiKey ? "API Key Configured" : "Configure API Key"}
-             >
-               {hasApiKey ? <Key size={20} /> : <Settings size={20} />}
-             </button>
-             <input type="file" ref={fileInputRef} onChange={importPortfolio} accept=".json" className="hidden" />
-             <button onClick={() => fileInputRef.current?.click()} className="p-2 text-slate-400 hover:text-white" title="Import Data"><Upload size={20} /></button>
-             <button onClick={exportPortfolio} className="p-2 text-slate-400 hover:text-white" title="Export Data"><Download size={20} /></button>
+            <button 
+              onClick={() => setIsPortfolioManagerOpen(true)} 
+              className="p-2 text-slate-400 hover:text-white transition-colors"
+              title="Manage Portfolios"
+            >
+              <FolderOpen size={20} />
+            </button>
+            <button 
+              onClick={() => setIsSettingsOpen(true)} 
+              className={`p-2 rounded-lg transition-colors ${hasApiKey ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300 animate-pulse'}`}
+              title={hasApiKey ? "API Key Configured" : "Configure API Key"}
+            >
+              {hasApiKey ? <Key size={20} /> : <Settings size={20} />}
+            </button>
+            <input type="file" ref={fileInputRef} onChange={importPortfolio} accept=".json" className="hidden" />
+            <button onClick={() => fileInputRef.current?.click()} className="p-2 text-slate-400 hover:text-white" title="Import Data"><Upload size={20} /></button>
+            <button onClick={exportPortfolio} className="p-2 text-slate-400 hover:text-white" title="Export Data"><Download size={20} /></button>
           </div>
         </div>
       </header>
 
       {!hasApiKey && (
-        <div className="max-w-5xl mx-auto px-4 pt-4">
+        <div className="max-w-screen-2xl mx-auto px-8 pt-4">
           <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4 flex items-start gap-3">
             <Key className="text-amber-400 flex-shrink-0 mt-0.5" size={20} />
             <div className="flex-1">
@@ -268,7 +450,10 @@ const App: React.FC = () => {
               totalPortfolioValue={summary.totalValue} 
               onRemoveTransaction={handleRemoveTransaction} 
               onRefresh={handleRefreshAsset} 
-              onRemove={() => setAssets(prev => prev.filter(a => a.id !== asset.id))} 
+              onRemove={() => updateActivePortfolio(portfolio => ({
+                ...portfolio,
+                assets: portfolio.assets.filter(a => a.id !== asset.id)
+              }))} 
               onUpdate={handleUpdateAsset} 
               onRetryHistory={() => {}} 
             />
@@ -277,6 +462,16 @@ const App: React.FC = () => {
       </main>
 
       <ApiKeySettings isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <PortfolioManager 
+        isOpen={isPortfolioManagerOpen}
+        onClose={() => setIsPortfolioManagerOpen(false)}
+        portfolios={portfolios}
+        activePortfolioId={activePortfolioId}
+        onSelectPortfolio={setActivePortfolioId}
+        onCreatePortfolio={handleCreatePortfolio}
+        onRenamePortfolio={handleRenamePortfolio}
+        onDeletePortfolio={handleDeletePortfolio}
+      />
     </div>
   );
 };

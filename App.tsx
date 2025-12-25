@@ -216,7 +216,8 @@ const App: React.FC = () => {
       date, 
       totalCost,
       tag,
-      customTag: tag === 'Custom' ? customTag : undefined
+      customTag: tag === 'Custom' ? customTag : undefined,
+      createdAt: new Date().toISOString()
     };
     const existingAsset = assets.find(a => a.ticker === ticker);
     

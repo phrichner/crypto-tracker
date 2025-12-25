@@ -275,9 +275,17 @@ export const AssetCard: React.FC<AssetCardProps> = ({
                       <tr key={tx.id} className="hover:bg-white/5 group">
                         <td className="p-2 text-slate-400">
                           <div className="flex flex-col">
-                            <span>{tx.date}</span>
+                            <span 
+                              className="cursor-help"
+                              title={tx.lastEdited 
+                                ? `Added: ${new Date(tx.createdAt).toLocaleString()}\nLast edited: ${new Date(tx.lastEdited).toLocaleString()}` 
+                                : `Added: ${new Date(tx.createdAt).toLocaleString()}`
+                              }
+                            >
+                              {tx.date}
+                            </span>
                             {tx.lastEdited && (
-                              <span className="text-[9px] text-slate-600 flex items-center gap-1" title={`Last edited: ${new Date(tx.lastEdited).toLocaleString()}`}>
+                              <span className="text-[9px] text-slate-600 flex items-center gap-1">
                                 <Edit2 size={8} /> edited
                               </span>
                             )}

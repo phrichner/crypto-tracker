@@ -25,6 +25,7 @@ export interface Transaction {
   totalCost: number;
   tag: TransactionTag; // REQUIRED: Transaction tags for analytics
   customTag?: string; // Custom tag text if tag === 'Custom'
+  createdAt: string; // Timestamp when transaction was created
   lastEdited?: string; // Track when transaction was last edited
 }
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Asset, TransactionTag, TAG_COLORS } from '../types';
+import { Asset, TransactionTag, TAG_COLORS, ASSET_TYPE_CONFIG } from '../types';
 import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle, Edit2, Check, X, Tag } from 'lucide-react';
 
 interface AssetCardProps {
@@ -103,6 +103,19 @@ export const AssetCard: React.FC<AssetCardProps> = ({
         <div>
           <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
             {asset.name || asset.ticker}
+            {/* Asset Type Badge */}
+            <span 
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium normal-case"
+              style={{ 
+                backgroundColor: `${ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].color}20`, 
+                color: ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].color,
+                borderColor: `${ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].color}40`,
+                borderWidth: '1px'
+              }}
+            >
+              <span>{ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].icon}</span>
+              {ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].label}
+            </span>
             {asset.error && <AlertCircle size={16} className="text-red-500" />}
             {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
             {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
@@ -277,9 +290,12 @@ export const AssetCard: React.FC<AssetCardProps> = ({
                           <div className="flex flex-col">
                             <span 
                               className="cursor-help"
-                              title={tx.lastEdited 
-                                ? `Added: ${new Date(tx.createdAt).toLocaleString()}\nLast edited: ${new Date(tx.lastEdited).toLocaleString()}` 
-                                : `Added: ${new Date(tx.createdAt).toLocaleString()}`
+                              title={
+                                tx.createdAt 
+                                  ? (tx.lastEdited 
+                                      ? `Added: ${new Date(tx.createdAt).toLocaleString()}\nLast edited: ${new Date(tx.lastEdited).toLocaleString()}` 
+                                      : `Added: ${new Date(tx.createdAt).toLocaleString()}`)
+                                  : tx.date // Fallback to just showing the date if no createdAt
                               }
                             >
                               {tx.date}

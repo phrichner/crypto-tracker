@@ -346,9 +346,12 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
 };
 
 export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => {
+  console.log('🔵 fetchCryptoPrice called with:', ticker);
   const detected = detectAssetType(ticker);
+  console.log('🔍 Detected type:', detected);
   
   if (detected.assetType === 'CASH') {
+    console.log('💵 Routing to CASH handler');
     if (detected.currency === 'USD' || STABLECOINS_USD.includes(ticker.toUpperCase())) {
       savePriceSnapshot(ticker, 1.0);
       return {
@@ -389,9 +392,19 @@ export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => 
     }
   }
   
-  if (isContractAddress(ticker)) return fetchTokenPriceFromDex(ticker);
-  if (detected.assetType === 'STOCK') return fetchStockPrice(ticker);
+  console.log('🔍 Checking if contract address:', ticker, '→', isContractAddress(ticker));
+  if (isContractAddress(ticker)) {
+    console.log('✅ Routing to DEXScreener');
+    return fetchTokenPriceFromDex(ticker);
+  }
   
+  console.log('🔍 Checking if stock:', detected.assetType);
+  if (detected.assetType === 'STOCK') {
+    console.log('📈 Routing to Yahoo Finance');
+    return fetchStockPrice(ticker);
+  }
+  
+  console.log('🤖 Routing to Gemini AI (fallback)');
   try {
     const apiKey = localStorage.getItem('gemini_api_key') || '';
     if (!apiKey) throw new Error("API key not configured");

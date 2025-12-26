@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Asset, TransactionTag, TAG_COLORS, ASSET_TYPE_CONFIG } from '../types';
-import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle, Edit2, Check, X, Tag } from 'lucide-react';
+import { Asset } from '../types';
+import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle } from 'lucide-react';
 
 interface AssetCardProps {
   asset: Asset;
@@ -10,23 +10,18 @@ interface AssetCardProps {
   onRefresh: (id: string) => void;
   onUpdate: (id: string, updates: Partial<Asset>) => void;
   onRetryHistory: (id: string) => void;
-  onEditTransaction: (assetId: string, txId: string, updates: { quantity: number; pricePerCoin: number; date: string; tag: TransactionTag; customTag?: string }) => void;
+  onEditTransaction: (assetId: string, txId: string, updates: Partial<{quantity: number; pricePerCoin: number; date: string; tag: string}>) => void;
 }
 
-const TAG_OPTIONS: TransactionTag[] = ['DCA', 'FOMO', 'Strategic', 'Swing Trade', 'Long-term Hold', 'Dip Buy', 'Custom'];
+const ASSET_TYPE_CONFIG = {
+  CRYPTO: { icon: '🪙', label: 'Crypto', color: 'bg-purple-500/20 text-purple-300 border-purple-500/30' },
+  STOCK: { icon: '📈', label: 'Stock', color: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
+  ETF: { icon: '📊', label: 'ETF', color: 'bg-teal-500/20 text-teal-300 border-teal-500/30' },
+  CASH: { icon: '💵', label: 'Cash', color: 'bg-gray-500/20 text-gray-300 border-gray-500/30' }
+};
 
-export const AssetCard: React.FC<AssetCardProps> = ({ 
-  asset, 
-  totalPortfolioValue, 
-  onRemove, 
-  onRemoveTransaction, 
-  onRefresh, 
-  onUpdate, 
-  onEditTransaction 
-}) => {
+export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue, onRemove, onRemoveTransaction, onRefresh, onUpdate }) => {
   const [showDetails, setShowDetails] = useState(false);
-  const [editingTxId, setEditingTxId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ quantity: '', pricePerCoin: '', date: '', tag: 'DCA' as TransactionTag, customTag: '' });
 
   const currentTotalValue = asset.quantity * asset.currentPrice;
   const totalCost = asset.totalCostBasis;
@@ -45,81 +40,26 @@ export const AssetCard: React.FC<AssetCardProps> = ({
   const pctFmt = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2, signDisplay: "always" });
 
   const isContractAddress = asset.ticker.startsWith('0x') && asset.ticker.length >= 40;
-
-  const handleStartEdit = (tx: any) => {
-    setEditingTxId(tx.id);
-    setEditForm({
-      quantity: tx.quantity.toString(),
-      pricePerCoin: tx.pricePerCoin.toString(),
-      date: tx.date,
-      tag: tx.tag || 'DCA',
-      customTag: tx.customTag || ''
-    });
-  };
-
-  const handleSaveEdit = (txId: string) => {
-    const quantity = parseFloat(editForm.quantity);
-    const pricePerCoin = parseFloat(editForm.pricePerCoin);
-    
-    if (isNaN(quantity) || isNaN(pricePerCoin) || quantity <= 0 || pricePerCoin <= 0) {
-      alert('Please enter valid positive numbers');
-      return;
-    }
-
-    onEditTransaction(asset.id, txId, {
-      quantity,
-      pricePerCoin,
-      date: editForm.date,
-      tag: editForm.tag,
-      customTag: editForm.tag === 'Custom' ? editForm.customTag : undefined
-    });
-    
-    setEditingTxId(null);
-  };
-
-  const handleCancelEdit = () => {
-    setEditingTxId(null);
-    setEditForm({ quantity: '', pricePerCoin: '', date: '', tag: 'DCA', customTag: '' });
-  };
-
-  const getTagDisplay = (tx: any) => {
-    const tagText = tx.tag === 'Custom' && tx.customTag ? tx.customTag : tx.tag;
-    const tagColor = TAG_COLORS[tx.tag as TransactionTag] || TAG_COLORS['Custom'];
-    
-    return (
-      <span 
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium"
-        style={{ backgroundColor: `${tagColor}20`, color: tagColor, borderColor: `${tagColor}40`, borderWidth: '1px' }}
-      >
-        <Tag size={10} />
-        {tagText}
-      </span>
-    );
-  };
+  
+  const assetType = asset.assetType || 'CRYPTO';
+  const assetConfig = ASSET_TYPE_CONFIG[assetType];
 
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg relative overflow-hidden transition-all hover:border-slate-600">
       <div className="flex justify-between items-start mb-2">
         <div>
-          <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
-            {asset.name || asset.ticker}
-            {/* Asset Type Badge */}
-            <span 
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium normal-case"
-              style={{ 
-                backgroundColor: `${ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].color}20`, 
-                color: ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].color,
-                borderColor: `${ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].color}40`,
-                borderWidth: '1px'
-              }}
-            >
-              <span>{ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].icon}</span>
-              {ASSET_TYPE_CONFIG[asset.assetType || 'CRYPTO'].label}
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
+              {asset.name || asset.ticker}
+              {asset.error && <AlertCircle size={16} className="text-red-500" />}
+              {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
+              {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
+            </h3>
+            <span className={`text-[10px] px-2 py-0.5 rounded border ${assetConfig.color} font-medium flex items-center gap-1`}>
+              <span>{assetConfig.icon}</span>
+              <span>{assetConfig.label}</span>
             </span>
-            {asset.error && <AlertCircle size={16} className="text-red-500" />}
-            {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
-            {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
-          </h3>
+          </div>
           {asset.name && isContractAddress && (
             <p className="text-slate-500 text-xs font-mono mb-1">{asset.ticker.slice(0, 10)}...{asset.ticker.slice(-8)}</p>
           )}
@@ -185,154 +125,37 @@ export const AssetCard: React.FC<AssetCardProps> = ({
 
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-2 flex items-center gap-1">
-              <History size={10} /> Transaction History
+              <History size={10} /> History
             </p>
-            <div className="max-h-96 overflow-y-auto custom-scrollbar bg-slate-900/30 rounded border border-slate-700/50">
+            <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-900/30 rounded border border-slate-700/50">
               <table className="w-full text-left text-[11px]">
                 <thead className="bg-slate-800/50 text-slate-400 sticky top-0">
                   <tr>
                     <th className="p-2">Date</th>
                     <th className="p-2">Qty</th>
-                    <th className="p-2 text-right">Price</th>
                     <th className="p-2 text-right">Cost</th>
                     <th className="p-2 text-right">P&L</th>
-                    <th className="p-2">Tag</th>
-                    <th className="p-2 w-16"></th>
+                    <th className="p-2 w-8"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/50 text-slate-300">
                   {asset.transactions.map((tx) => {
                     const txPnL = (tx.quantity * asset.currentPrice) - tx.totalCost;
-                    const isEditing = editingTxId === tx.id;
-                    
-                    if (isEditing) {
-                      return (
-                        <tr key={tx.id} className="bg-indigo-900/10">
-                          <td className="p-2">
-                            <input
-                              type="date"
-                              value={editForm.date}
-                              onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
-                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[11px] text-white [color-scheme:dark]"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              step="any"
-                              value={editForm.quantity}
-                              onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })}
-                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[11px] text-white font-mono"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              step="any"
-                              value={editForm.pricePerCoin}
-                              onChange={(e) => setEditForm({ ...editForm, pricePerCoin: e.target.value })}
-                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[11px] text-white font-mono text-right"
-                            />
-                          </td>
-                          <td className="p-2 text-right font-mono text-slate-400">
-                            {currencyFmt.format((parseFloat(editForm.quantity) || 0) * (parseFloat(editForm.pricePerCoin) || 0))}
-                          </td>
-                          <td className="p-2 text-right">-</td>
-                          <td className="p-2">
-                            <select
-                              value={editForm.tag}
-                              onChange={(e) => setEditForm({ ...editForm, tag: e.target.value as TransactionTag })}
-                              className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[10px] text-white"
-                              style={{ color: TAG_COLORS[editForm.tag] }}
-                            >
-                              {TAG_OPTIONS.map(tagOption => (
-                                <option key={tagOption} value={tagOption} style={{ color: TAG_COLORS[tagOption] }}>
-                                  {tagOption}
-                                </option>
-                              ))}
-                            </select>
-                            {editForm.tag === 'Custom' && (
-                              <input
-                                type="text"
-                                value={editForm.customTag}
-                                onChange={(e) => setEditForm({ ...editForm, customTag: e.target.value })}
-                                placeholder="Custom tag..."
-                                className="w-full bg-slate-800 border border-slate-600 rounded px-1 py-0.5 text-[10px] text-white mt-1"
-                                maxLength={20}
-                              />
-                            )}
-                          </td>
-                          <td className="p-2 text-right">
-                            <div className="flex gap-1">
-                              <button 
-                                onClick={() => handleSaveEdit(tx.id)} 
-                                className="text-emerald-400 hover:text-emerald-300 transition-colors p-1 rounded hover:bg-emerald-400/10"
-                                title="Save"
-                              >
-                                <Check size={14} />
-                              </button>
-                              <button 
-                                onClick={handleCancelEdit} 
-                                className="text-slate-400 hover:text-slate-300 transition-colors p-1 rounded hover:bg-slate-400/10"
-                                title="Cancel"
-                              >
-                                <X size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
-                    
                     return (
-                      <tr key={tx.id} className="hover:bg-white/5 group">
-                        <td className="p-2 text-slate-400">
-                          <div className="flex flex-col">
-                            <span 
-                              className="cursor-help"
-                              title={
-                                tx.createdAt 
-                                  ? (tx.lastEdited 
-                                      ? `Added: ${new Date(tx.createdAt).toLocaleString()}\nLast edited: ${new Date(tx.lastEdited).toLocaleString()}` 
-                                      : `Added: ${new Date(tx.createdAt).toLocaleString()}`)
-                                  : tx.date // Fallback to just showing the date if no createdAt
-                              }
-                            >
-                              {tx.date}
-                            </span>
-                            {tx.lastEdited && (
-                              <span className="text-[9px] text-slate-600 flex items-center gap-1">
-                                <Edit2 size={8} /> edited
-                              </span>
-                            )}
-                          </div>
-                        </td>
+                      <tr key={tx.id} className="hover:bg-white/5">
+                        <td className="p-2 text-slate-400">{tx.date}</td>
                         <td className="p-2 font-mono">{tx.quantity.toLocaleString()}</td>
-                        <td className="p-2 text-right font-mono">{currencyFmt.format(tx.pricePerCoin)}</td>
                         <td className="p-2 text-right font-mono">{currencyFmt.format(tx.totalCost)}</td>
                         <td className={`p-2 text-right font-mono ${txPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {txPnL >= 0 ? '+' : ''}{currencyFmt.format(txPnL)}
                         </td>
-                        <td className="p-2">
-                          {getTagDisplay(tx)}
-                        </td>
                         <td className="p-2 text-right">
-                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button 
-                              onClick={() => handleStartEdit(tx)} 
-                              className="text-slate-500 hover:text-indigo-400 transition-colors p-1 rounded hover:bg-indigo-400/10"
-                              title="Edit transaction"
-                            >
-                              <Edit2 size={12} />
-                            </button>
-                            <button 
-                              onClick={() => onRemoveTransaction(asset.id, tx.id)} 
-                              className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-400/10"
-                              title="Delete transaction"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
+                          <button 
+                            onClick={() => onRemoveTransaction(asset.id, tx.id)} 
+                            className="text-slate-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-red-400/10"
+                          >
+                            <Trash2 size={12} />
+                          </button>
                         </td>
                       </tr>
                     );

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag } from './types';
-import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
+import { fetchCryptoPrice, fetchAssetHistory, delay, detectAssetType } from './services/geminiService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
 import { Summary } from './components/Summary';
@@ -8,25 +8,15 @@ import { ApiKeySettings } from './components/ApiKeySettings';
 import { PortfolioManager } from './components/PortfolioManager';
 import { Wallet, Download, Upload, Settings, Key, FolderOpen, Plus, Check } from 'lucide-react';
 
-// Portfolio colors for visual distinction
 const PORTFOLIO_COLORS = [
-  '#6366f1', // Indigo
-  '#10b981', // Emerald
-  '#f59e0b', // Amber
-  '#ec4899', // Pink
-  '#8b5cf6', // Purple
-  '#06b6d4', // Cyan
-  '#f43f5e', // Rose
-  '#14b8a6', // Teal
+  '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f43f5e', '#14b8a6',
 ];
 
-// Migration: Convert old structure to new portfolio structure
 const migrateToPortfolios = (): Portfolio[] => {
   const oldAssets = localStorage.getItem('portfolio_assets');
   const oldHistory = localStorage.getItem('portfolio_history');
   
   if (!oldAssets && !oldHistory) {
-    // No old data, return default empty portfolio
     return [{
       id: Math.random().toString(36).substr(2, 9),
       name: 'Main Portfolio',
@@ -38,7 +28,6 @@ const migrateToPortfolios = (): Portfolio[] => {
     }];
   }
   
-  // Migrate old data to new structure
   const assets: Asset[] = oldAssets ? JSON.parse(oldAssets) : [];
   const history: HistorySnapshot[] = oldHistory ? JSON.parse(oldHistory) : [];
   
@@ -52,7 +41,6 @@ const migrateToPortfolios = (): Portfolio[] => {
     createdAt: new Date().toISOString()
   };
   
-  // Clean up old keys
   localStorage.removeItem('portfolio_assets');
   localStorage.removeItem('portfolio_history');
   
@@ -60,30 +48,12 @@ const migrateToPortfolios = (): Portfolio[] => {
   return [migratedPortfolio];
 };
 
-// Migrate transactions to include required tags and createdAt
-const migrateTransactionTags = (portfolios: Portfolio[]): Portfolio[] => {
-  return portfolios.map(portfolio => ({
-    ...portfolio,
-    assets: portfolio.assets.map(asset => ({
-      ...asset,
-      assetType: asset.assetType || 'CRYPTO', // Default to CRYPTO
-      transactions: asset.transactions.map(tx => ({
-        ...tx,
-        tag: tx.tag || 'DCA', // Default untagged transactions to DCA
-        createdAt: tx.createdAt || tx.date || new Date().toISOString() // Use transaction date as createdAt if missing
-      }))
-    }))
-  }));
-};
-
 const App: React.FC = () => {
   const [portfolios, setPortfolios] = useState<Portfolio[]>(() => {
     const saved = localStorage.getItem('portfolios');
     if (saved) {
-      const parsed = JSON.parse(saved);
-      return migrateTransactionTags(parsed); // Migrate old data
+      return JSON.parse(saved);
     }
-    // Migration or first load
     return migrateToPortfolios();
   });
 
@@ -98,7 +68,6 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Get active portfolio
   const activePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
   const assets = activePortfolio?.assets || [];
   const history = activePortfolio?.history || [];
@@ -113,12 +82,10 @@ const App: React.FC = () => {
     return () => window.removeEventListener('storage', checkApiKey);
   }, [isSettingsOpen]);
 
-  // Save portfolios to localStorage
   useEffect(() => {
     localStorage.setItem('portfolios', JSON.stringify(portfolios));
   }, [portfolios]);
 
-  // Save active portfolio ID
   useEffect(() => {
     localStorage.setItem('active_portfolio_id', activePortfolioId);
   }, [activePortfolioId]);
@@ -157,7 +124,7 @@ const App: React.FC = () => {
     };
     updateActivePortfolio(portfolio => ({
       ...portfolio,
-      history: [...portfolio.history, snapshot].slice(-200) // Keep last 200
+      history: [...portfolio.history, snapshot].slice(-200)
     }));
   }, [activePortfolioId]);
 
@@ -165,6 +132,45 @@ const App: React.FC = () => {
     updateActivePortfolio(portfolio => ({
       ...portfolio,
       assets: portfolio.assets.map(a => a.id === id ? { ...a, ...updates } : a)
+    }));
+  };
+
+  const handleEditTransaction = (assetId: string, txId: string, updates: Partial<{quantity: number; pricePerCoin: number; date: string; tag: TransactionTag}>) => {
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      assets: portfolio.assets.map(asset => {
+        if (asset.id !== assetId) return asset;
+        
+        const updatedTxs = asset.transactions.map(tx => {
+          if (tx.id !== txId) return tx;
+          
+          const newQuantity = updates.quantity !== undefined ? updates.quantity : tx.quantity;
+          const newPricePerCoin = updates.pricePerCoin !== undefined ? updates.pricePerCoin : tx.pricePerCoin;
+          const newDate = updates.date || tx.date;
+          const newTag = updates.tag || tx.tag;
+          
+          return {
+            ...tx,
+            quantity: newQuantity,
+            pricePerCoin: newPricePerCoin,
+            totalCost: newQuantity * newPricePerCoin,
+            date: newDate,
+            tag: newTag,
+            lastEdited: new Date().toISOString()
+          };
+        });
+        
+        const newQty = updatedTxs.reduce((sum, tx) => sum + tx.quantity, 0);
+        const newCost = updatedTxs.reduce((sum, tx) => sum + tx.totalCost, 0);
+        
+        return {
+          ...asset,
+          transactions: updatedTxs,
+          quantity: newQty,
+          totalCostBasis: newCost,
+          avgBuyPrice: newCost / newQty
+        };
+      })
     }));
   };
 
@@ -188,7 +194,9 @@ const App: React.FC = () => {
           lastUpdated: new Date().toISOString(),
           isUpdating: false,
           error: undefined,
-          name: result.name || result.symbol || a.name
+          name: result.name || result.symbol || a.name,
+          assetType: result.assetType || a.assetType,
+          currency: result.currency || a.currency
         } : a)
       }));
     } catch (error: any) {
@@ -207,9 +215,7 @@ const App: React.FC = () => {
       quantity, 
       pricePerCoin, 
       date, 
-      totalCost,
-      tag: 'DCA', // Default tag
-      createdAt: new Date().toISOString()
+      totalCost 
     };
     const existingAsset = assets.find(a => a.ticker === ticker);
     
@@ -230,6 +236,10 @@ const App: React.FC = () => {
     } else {
       const newId = Math.random().toString(36).substr(2, 9);
       
+      // Detect asset type
+      const detected = detectAssetType(ticker);
+      console.log('🎯 Auto-detected asset:', { ticker, ...detected });
+      
       const tempAsset: Asset = { 
         id: newId, 
         ticker, 
@@ -242,7 +252,8 @@ const App: React.FC = () => {
         transactions: [newTx], 
         avgBuyPrice: pricePerCoin, 
         totalCostBasis: totalCost,
-        assetType: 'CRYPTO' // Default to CRYPTO for now (P0.3 will add auto-detection)
+        assetType: detected.assetType,
+        currency: detected.currency
       };
       
       updateActivePortfolio(portfolio => ({
@@ -259,7 +270,9 @@ const App: React.FC = () => {
             currentPrice: result.price, 
             sources: result.sources, 
             isUpdating: false,
-            name: result.name || result.symbol || a.name
+            name: result.name || result.symbol || a.name,
+            assetType: result.assetType || a.assetType,
+            currency: result.currency || a.currency
           } : a)
         }));
         
@@ -293,41 +306,6 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleEditTransaction = (assetId: string, txId: string, updates: { quantity: number; pricePerCoin: number; date: string; tag: TransactionTag; customTag?: string }) => {
-    updateActivePortfolio(portfolio => ({
-      ...portfolio,
-      assets: portfolio.assets.map(asset => {
-        if (asset.id !== assetId) return asset;
-        
-        const updatedTransactions = asset.transactions.map(tx => {
-          if (tx.id !== txId) return tx;
-          
-          return {
-            ...tx,
-            quantity: updates.quantity,
-            pricePerCoin: updates.pricePerCoin,
-            date: updates.date,
-            totalCost: updates.quantity * updates.pricePerCoin,
-            tag: updates.tag,
-            customTag: updates.customTag,
-            lastEdited: new Date().toISOString()
-          };
-        });
-        
-        const newQty = updatedTransactions.reduce((sum, tx) => sum + tx.quantity, 0);
-        const newCost = updatedTransactions.reduce((sum, tx) => sum + tx.totalCost, 0);
-        
-        return {
-          ...asset,
-          transactions: updatedTransactions,
-          quantity: newQty,
-          totalCostBasis: newCost,
-          avgBuyPrice: newCost / newQty
-        };
-      })
-    }));
-  };
-
   const handleRefreshAll = async () => {
     if (isLoading) return;
     setIsLoading(true);
@@ -335,7 +313,14 @@ const App: React.FC = () => {
     for (let i = 0; i < updated.length; i++) {
       try {
         const res = await fetchCryptoPrice(updated[i].ticker);
-        updated[i] = { ...updated[i], currentPrice: res.price, lastUpdated: new Date().toISOString(), name: res.name || res.symbol || updated[i].name };
+        updated[i] = { 
+          ...updated[i], 
+          currentPrice: res.price, 
+          lastUpdated: new Date().toISOString(), 
+          name: res.name || res.symbol || updated[i].name,
+          assetType: res.assetType || updated[i].assetType,
+          currency: res.currency || updated[i].currency
+        };
         updateActivePortfolio(portfolio => ({
           ...portfolio,
           assets: [...updated]
@@ -348,7 +333,6 @@ const App: React.FC = () => {
   };
 
   const exportPortfolio = () => {
-    // Export ALL portfolios + price snapshots + deleted portfolios
     const snapshots: Record<string, any> = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -386,7 +370,6 @@ const App: React.FC = () => {
           setPortfolios(parsed.portfolios);
           setActivePortfolioId(parsed.portfolios[0]?.id || '');
         } else if (parsed.assets) {
-          // Old format - migrate
           const migratedPortfolios = migrateToPortfolios();
           setPortfolios(migratedPortfolios);
           setActivePortfolioId(migratedPortfolios[0].id);
@@ -406,7 +389,6 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
-  // Portfolio management functions
   const handleCreatePortfolio = (name: string) => {
     const newPortfolio: Portfolio = {
       id: Math.random().toString(36).substr(2, 9),
@@ -441,7 +423,6 @@ const App: React.FC = () => {
       if (!confirmed) return;
     }
     
-    // Save to deleted portfolios before removing
     if (portfolio) {
       const deletedPortfolios = JSON.parse(localStorage.getItem('deleted_portfolios') || '[]');
       deletedPortfolios.push({
@@ -480,7 +461,6 @@ const App: React.FC = () => {
                   </svg>
                 </button>
                 
-                {/* Dropdown Menu */}
                 <div className="absolute top-full left-0 mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
                   <div className="p-2 max-h-80 overflow-y-auto">
                     {portfolios.map(portfolio => (
@@ -569,7 +549,6 @@ const App: React.FC = () => {
               asset={asset} 
               totalPortfolioValue={summary.totalValue} 
               onRemoveTransaction={handleRemoveTransaction} 
-              onEditTransaction={handleEditTransaction}
               onRefresh={handleRefreshAsset} 
               onRemove={() => updateActivePortfolio(portfolio => ({
                 ...portfolio,
@@ -577,6 +556,7 @@ const App: React.FC = () => {
               }))} 
               onUpdate={handleUpdateAsset} 
               onRetryHistory={() => {}} 
+              onEditTransaction={handleEditTransaction}
             />
           ))}
         </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot } from './types';
+import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag } from './types';
 import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
@@ -293,6 +293,41 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleEditTransaction = (assetId: string, txId: string, updates: { quantity: number; pricePerCoin: number; date: string; tag: TransactionTag; customTag?: string }) => {
+    updateActivePortfolio(portfolio => ({
+      ...portfolio,
+      assets: portfolio.assets.map(asset => {
+        if (asset.id !== assetId) return asset;
+        
+        const updatedTransactions = asset.transactions.map(tx => {
+          if (tx.id !== txId) return tx;
+          
+          return {
+            ...tx,
+            quantity: updates.quantity,
+            pricePerCoin: updates.pricePerCoin,
+            date: updates.date,
+            totalCost: updates.quantity * updates.pricePerCoin,
+            tag: updates.tag,
+            customTag: updates.customTag,
+            lastEdited: new Date().toISOString()
+          };
+        });
+        
+        const newQty = updatedTransactions.reduce((sum, tx) => sum + tx.quantity, 0);
+        const newCost = updatedTransactions.reduce((sum, tx) => sum + tx.totalCost, 0);
+        
+        return {
+          ...asset,
+          transactions: updatedTransactions,
+          quantity: newQty,
+          totalCostBasis: newCost,
+          avgBuyPrice: newCost / newQty
+        };
+      })
+    }));
+  };
+
   const handleRefreshAll = async () => {
     if (isLoading) return;
     setIsLoading(true);
@@ -534,6 +569,7 @@ const App: React.FC = () => {
               asset={asset} 
               totalPortfolioValue={summary.totalValue} 
               onRemoveTransaction={handleRemoveTransaction} 
+              onEditTransaction={handleEditTransaction}
               onRefresh={handleRefreshAsset} 
               onRemove={() => updateActivePortfolio(portfolio => ({
                 ...portfolio,

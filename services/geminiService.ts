@@ -330,20 +330,51 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
     
     console.log(`📊 Found ${data.pairs.length} pairs total`);
     
-    const sortedPairs = data.pairs
-      .filter((pair: any) => {
-        const hasPrice = pair.priceUsd && parseFloat(pair.priceUsd) > 0;
-        console.log(`  Checking pair: ${pair.baseToken?.symbol} - Price: $${pair.priceUsd}, Valid: ${hasPrice}`);
-        return hasPrice;
-      })
-      .sort((a: any, b: any) => parseFloat(b.liquidity?.usd || 0) - parseFloat(a.liquidity?.usd || 0));
+    // Step 1: Get all valid prices
+    const validPairs = data.pairs.filter((pair: any) => {
+      const hasPrice = pair.priceUsd && parseFloat(pair.priceUsd) > 0;
+      const hasLiquidity = pair.liquidity?.usd && parseFloat(pair.liquidity.usd) > 0;
+      return hasPrice && hasLiquidity;
+    });
     
-    console.log(`✅ ${sortedPairs.length} valid pairs after filtering`);
+    if (validPairs.length === 0) {
+      console.error('❌ No valid pairs found');
+      throw new Error('No valid trading pairs');
+    }
     
-    if (sortedPairs.length === 0) {
+    // Step 2: Calculate median price to detect outliers
+    const prices = validPairs.map((p: any) => parseFloat(p.priceUsd)).sort((a, b) => a - b);
+    const medianPrice = prices[Math.floor(prices.length / 2)];
+    console.log(`📊 Median price from ${prices.length} pairs: $${medianPrice}`);
+    
+    // Step 3: Filter out extreme outliers (>10x or <0.1x median)
+    const filteredPairs = validPairs.filter((pair: any) => {
+      const price = parseFloat(pair.priceUsd);
+      const ratio = price / medianPrice;
+      const isValid = ratio >= 0.1 && ratio <= 10;
+      
+      if (!isValid) {
+        console.log(`  ⚠️ Rejecting outlier: ${pair.baseToken?.symbol} on ${pair.dexId} - Price: $${price} (${ratio.toFixed(1)}x median)`);
+      } else {
+        console.log(`  ✅ Valid pair: ${pair.baseToken?.symbol} on ${pair.dexId} - Price: $${price}, Liq: $${(parseFloat(pair.liquidity.usd) / 1e6).toFixed(2)}M`);
+      }
+      
+      return isValid;
+    });
+    
+    console.log(`✅ ${filteredPairs.length} pairs after outlier filtering`);
+    
+    if (filteredPairs.length === 0) {
       console.error('❌ No valid pairs after filtering');
       throw new Error('No valid trading pairs');
     }
+    
+    // Step 4: Sort by liquidity and pick best
+    const sortedPairs = filteredPairs.sort((a: any, b: any) => {
+      return parseFloat(b.liquidity?.usd || 0) - parseFloat(a.liquidity?.usd || 0);
+    });
+    
+    console.log(`✅ ${sortedPairs.length} pairs sorted by liquidity`);
     
     const bestPair = sortedPairs[0];
     console.log('🎯 Selected best pair:', {

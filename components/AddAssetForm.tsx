@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Plus, Loader2, Calendar, DollarSign } from 'lucide-react';
+import { Plus, Loader2, Calendar, DollarSign, Coins } from 'lucide-react';
 
 interface AddAssetFormProps {
-  onAdd: (ticker: string, quantity: number, pricePerCoin: number, date: string) => Promise<void>;
+  onAdd: (ticker: string, quantity: number, pricePerCoin: number, date: string, currency: string) => Promise<void>;
   isGlobalLoading: boolean;
 }
 
@@ -11,6 +11,7 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
   const [quantity, setQuantity] = useState('');
   const [totalPaid, setTotalPaid] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [currency, setCurrency] = useState('USD');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,10 +20,20 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
 
     const qtyNum = parseFloat(quantity);
     const totalPaidNum = parseFloat(totalPaid);
+    
+    // Calculate price per coin derived from total paid
     const calculatedPricePerCoin = qtyNum > 0 ? totalPaidNum / qtyNum : 0;
 
     setIsSubmitting(true);
-    await onAdd(ticker, qtyNum, calculatedPricePerCoin, date);
+    await onAdd(
+      ticker, 
+      qtyNum, 
+      calculatedPricePerCoin,
+      date,
+      currency
+    );
+    
+    // Reset form but keep date as today and currency selection
     setTicker('');
     setQuantity('');
     setTotalPaid('');
@@ -36,7 +47,7 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
         Add Transaction
       </h2>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="flex-1 w-full">
             <label htmlFor="ticker" className="block text-xs font-medium text-slate-400 mb-1">
               Ticker Symbol
@@ -47,14 +58,10 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
               value={ticker}
               onChange={(e) => {
                 const value = e.target.value;
+                // Only uppercase if it's NOT a contract address
                 setTicker(value.startsWith('0x') && value.length > 10 ? value : value.toUpperCase());
               }}
               placeholder="BTC or 0x"
-              title="📊 Stock Entry Tips:
-• Swiss stocks: Add .SW suffix (e.g., NESN.SW)
-• German stocks: Add .DE suffix (e.g., BMW.DE)
-• US stocks: Just ticker (e.g., AAPL)
-• Crypto: Ticker or contract address"
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder-slate-600 uppercase"
               required
             />
@@ -95,6 +102,27 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
             </div>
           </div>
           <div className="flex-1 w-full">
+            <label htmlFor="currency" className="block text-xs font-medium text-slate-400 mb-1">
+              Currency
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-2.5 text-slate-500">
+                <Coins size={16} />
+              </span>
+              <select
+                id="currency"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-9 pr-4 py-2.5 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-all appearance-none cursor-pointer"
+              >
+                <option value="USD">USD 🇺🇸</option>
+                <option value="CHF">CHF 🇨🇭</option>
+                <option value="EUR">EUR 🇪🇺</option>
+                <option value="GBP">GBP 🇬🇧</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex-1 w-full">
             <label htmlFor="date" className="block text-xs font-medium text-slate-400 mb-1">
               Date
             </label>
@@ -113,12 +141,20 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
             </div>
           </div>
         </div>
+        
         <button
           type="submit"
           disabled={isSubmitting || isGlobalLoading}
           className="w-full md:w-auto self-end bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-medium px-6 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 min-w-[120px]"
         >
-          {isSubmitting ? (<><Loader2 className="animate-spin" size={18} />Processing...</>) : ('Add Transaction')}
+          {isSubmitting ? (
+            <>
+              <Loader2 className="animate-spin" size={18} />
+              Processing...
+            </>
+          ) : (
+            'Add Transaction'
+          )}
         </button>
       </form>
     </div>

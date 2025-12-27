@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag } from './types';
-import { fetchCryptoPrice, fetchAssetHistory, delay, detectAssetType } from './services/geminiService';
+import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot } from './types';
+import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
 import { Summary } from './components/Summary';
@@ -8,26 +8,51 @@ import { ApiKeySettings } from './components/ApiKeySettings';
 import { PortfolioManager } from './components/PortfolioManager';
 import { Wallet, Download, Upload, Settings, Key, FolderOpen, Plus, Check } from 'lucide-react';
 
+// Portfolio colors for visual distinction
 const PORTFOLIO_COLORS = [
-  '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f43f5e', '#14b8a6',
+  '#6366f1', // Indigo
+  '#10b981', // Emerald
+  '#f59e0b', // Amber
+  '#ec4899', // Pink
+  '#8b5cf6', // Purple
+  '#06b6d4', // Cyan
+  '#f43f5e', // Rose
+  '#14b8a6', // Teal
 ];
 
+// Exchange rates for currency conversion (should match Summary.tsx)
+const EXCHANGE_RATES: Record<string, number> = {
+  'USD': 1.00,
+  'CHF': 0.92,  // 1 USD = 0.92 CHF
+  'EUR': 0.93,  // 1 USD = 0.93 EUR
+  'GBP': 0.79,  // 1 USD = 0.79 GBP
+};
+
+// Convert any currency to USD for aggregation
+const convertToUSD = (value: number, fromCurrency: string): number => {
+  if (fromCurrency === 'USD') return value;
+  return value / EXCHANGE_RATES[fromCurrency];
+};
+
+// Migration: Convert old structure to new portfolio structure
 const migrateToPortfolios = (): Portfolio[] => {
   const oldAssets = localStorage.getItem('portfolio_assets');
   const oldHistory = localStorage.getItem('portfolio_history');
   
   if (!oldAssets && !oldHistory) {
+    // No old data, return default empty portfolio
     return [{
       id: Math.random().toString(36).substr(2, 9),
       name: 'Main Portfolio',
       color: PORTFOLIO_COLORS[0],
       assets: [],
       history: [],
-      settings: {},
+      settings: { displayCurrency: 'USD' },
       createdAt: new Date().toISOString()
     }];
   }
   
+  // Migrate old data to new structure
   const assets: Asset[] = oldAssets ? JSON.parse(oldAssets) : [];
   const history: HistorySnapshot[] = oldHistory ? JSON.parse(oldHistory) : [];
   
@@ -37,10 +62,11 @@ const migrateToPortfolios = (): Portfolio[] => {
     color: PORTFOLIO_COLORS[0],
     assets,
     history,
-    settings: {},
+    settings: { displayCurrency: 'USD' },
     createdAt: new Date().toISOString()
   };
   
+  // Clean up old keys
   localStorage.removeItem('portfolio_assets');
   localStorage.removeItem('portfolio_history');
   
@@ -54,6 +80,7 @@ const App: React.FC = () => {
     if (saved) {
       return JSON.parse(saved);
     }
+    // Migration or first load
     return migrateToPortfolios();
   });
 
@@ -68,6 +95,7 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Get active portfolio
   const activePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
   const assets = activePortfolio?.assets || [];
   const history = activePortfolio?.history || [];
@@ -82,20 +110,29 @@ const App: React.FC = () => {
     return () => window.removeEventListener('storage', checkApiKey);
   }, [isSettingsOpen]);
 
+  // Save portfolios to localStorage
   useEffect(() => {
     localStorage.setItem('portfolios', JSON.stringify(portfolios));
   }, [portfolios]);
 
+  // Save active portfolio ID
   useEffect(() => {
     localStorage.setItem('active_portfolio_id', activePortfolioId);
   }, [activePortfolioId]);
 
+  // Calculate portfolio summary with multi-currency support
   const summary: PortfolioSummary = assets.reduce((acc, asset) => {
-    const assetValue = asset.quantity * asset.currentPrice;
+    const assetValueInNativeCurrency = asset.quantity * asset.currentPrice;
+    const assetCostInNativeCurrency = asset.totalCostBasis;
+    
+    // Convert to USD for aggregation
+    const assetValueInUSD = convertToUSD(assetValueInNativeCurrency, asset.currency || 'USD');
+    const assetCostInUSD = convertToUSD(assetCostInNativeCurrency, asset.currency || 'USD');
+    
     return {
-      totalValue: acc.totalValue + assetValue,
-      totalCostBasis: acc.totalCostBasis + asset.totalCostBasis,
-      totalPnL: acc.totalPnL + (assetValue - asset.totalCostBasis),
+      totalValue: acc.totalValue + assetValueInUSD,
+      totalCostBasis: acc.totalCostBasis + assetCostInUSD,
+      totalPnL: acc.totalPnL + (assetValueInUSD - assetCostInUSD),
       totalPnLPercent: 0,
       assetCount: acc.assetCount + 1,
       lastGlobalUpdate: asset.lastUpdated > (acc.lastGlobalUpdate || '') ? asset.lastUpdated : acc.lastGlobalUpdate
@@ -115,16 +152,27 @@ const App: React.FC = () => {
   };
 
   const recordHistorySnapshot = useCallback((currentAssets: Asset[]) => {
-    const totalValue = currentAssets.reduce((sum, a) => sum + (a.quantity * a.currentPrice), 0);
+    // Convert all asset values to USD for history
+    const totalValue = currentAssets.reduce((sum, a) => {
+      const valueInNative = a.quantity * a.currentPrice;
+      return sum + convertToUSD(valueInNative, a.currency || 'USD');
+    }, 0);
+    
     if (totalValue === 0) return;
+    
     const snapshot: HistorySnapshot = {
       timestamp: Date.now(),
       totalValue,
-      assetValues: currentAssets.reduce((acc, a) => ({ ...acc, [a.ticker]: a.quantity * a.currentPrice }), {})
+      assetValues: currentAssets.reduce((acc, a) => {
+        const valueInNative = a.quantity * a.currentPrice;
+        const valueInUSD = convertToUSD(valueInNative, a.currency || 'USD');
+        return { ...acc, [a.ticker]: valueInUSD };
+      }, {})
     };
+    
     updateActivePortfolio(portfolio => ({
       ...portfolio,
-      history: [...portfolio.history, snapshot].slice(-200)
+      history: [...portfolio.history, snapshot].slice(-200) // Keep last 200
     }));
   }, [activePortfolioId]);
 
@@ -132,45 +180,6 @@ const App: React.FC = () => {
     updateActivePortfolio(portfolio => ({
       ...portfolio,
       assets: portfolio.assets.map(a => a.id === id ? { ...a, ...updates } : a)
-    }));
-  };
-
-  const handleEditTransaction = (assetId: string, txId: string, updates: Partial<{quantity: number; pricePerCoin: number; date: string; tag: TransactionTag}>) => {
-    updateActivePortfolio(portfolio => ({
-      ...portfolio,
-      assets: portfolio.assets.map(asset => {
-        if (asset.id !== assetId) return asset;
-        
-        const updatedTxs = asset.transactions.map(tx => {
-          if (tx.id !== txId) return tx;
-          
-          const newQuantity = updates.quantity !== undefined ? updates.quantity : tx.quantity;
-          const newPricePerCoin = updates.pricePerCoin !== undefined ? updates.pricePerCoin : tx.pricePerCoin;
-          const newDate = updates.date || tx.date;
-          const newTag = updates.tag || tx.tag;
-          
-          return {
-            ...tx,
-            quantity: newQuantity,
-            pricePerCoin: newPricePerCoin,
-            totalCost: newQuantity * newPricePerCoin,
-            date: newDate,
-            tag: newTag,
-            lastEdited: new Date().toISOString()
-          };
-        });
-        
-        const newQty = updatedTxs.reduce((sum, tx) => sum + tx.quantity, 0);
-        const newCost = updatedTxs.reduce((sum, tx) => sum + tx.totalCost, 0);
-        
-        return {
-          ...asset,
-          transactions: updatedTxs,
-          quantity: newQty,
-          totalCostBasis: newCost,
-          avgBuyPrice: newCost / newQty
-        };
-      })
     }));
   };
 
@@ -194,9 +203,7 @@ const App: React.FC = () => {
           lastUpdated: new Date().toISOString(),
           isUpdating: false,
           error: undefined,
-          name: result.name || result.symbol || a.name,
-          assetType: result.assetType || a.assetType,
-          currency: result.currency || a.currency
+          name: result.name || result.symbol || a.name
         } : a)
       }));
     } catch (error: any) {
@@ -207,7 +214,13 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddAsset = async (ticker: string, quantity: number, pricePerCoin: number, date: string) => {
+  const handleAddAsset = async (
+    ticker: string, 
+    quantity: number, 
+    pricePerCoin: number, 
+    date: string,
+    currency: string = 'USD'
+  ) => {
     const totalCost = quantity * pricePerCoin;
     const newTx: Transaction = { 
       id: Math.random().toString(36).substr(2, 9), 
@@ -235,11 +248,6 @@ const App: React.FC = () => {
       }));
     } else {
       const newId = Math.random().toString(36).substr(2, 9);
-      
-      // Detect asset type
-      const detected = detectAssetType(ticker);
-      console.log('🎯 Auto-detected asset:', { ticker, ...detected });
-      
       const tempAsset: Asset = { 
         id: newId, 
         ticker, 
@@ -252,8 +260,7 @@ const App: React.FC = () => {
         transactions: [newTx], 
         avgBuyPrice: pricePerCoin, 
         totalCostBasis: totalCost,
-        assetType: detected.assetType,
-        currency: detected.currency
+        currency: currency // NEW: Store currency with asset
       };
       
       updateActivePortfolio(portfolio => ({
@@ -270,9 +277,7 @@ const App: React.FC = () => {
             currentPrice: result.price, 
             sources: result.sources, 
             isUpdating: false,
-            name: result.name || result.symbol || a.name,
-            assetType: result.assetType || a.assetType,
-            currency: result.currency || a.currency
+            name: result.name || result.symbol || a.name
           } : a)
         }));
         
@@ -313,14 +318,7 @@ const App: React.FC = () => {
     for (let i = 0; i < updated.length; i++) {
       try {
         const res = await fetchCryptoPrice(updated[i].ticker);
-        updated[i] = { 
-          ...updated[i], 
-          currentPrice: res.price, 
-          lastUpdated: new Date().toISOString(), 
-          name: res.name || res.symbol || updated[i].name,
-          assetType: res.assetType || updated[i].assetType,
-          currency: res.currency || updated[i].currency
-        };
+        updated[i] = { ...updated[i], currentPrice: res.price, lastUpdated: new Date().toISOString(), name: res.name || res.symbol || updated[i].name };
         updateActivePortfolio(portfolio => ({
           ...portfolio,
           assets: [...updated]
@@ -333,6 +331,7 @@ const App: React.FC = () => {
   };
 
   const exportPortfolio = () => {
+    // Export ALL portfolios + price snapshots + deleted portfolios
     const snapshots: Record<string, any> = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -370,6 +369,7 @@ const App: React.FC = () => {
           setPortfolios(parsed.portfolios);
           setActivePortfolioId(parsed.portfolios[0]?.id || '');
         } else if (parsed.assets) {
+          // Old format - migrate
           const migratedPortfolios = migrateToPortfolios();
           setPortfolios(migratedPortfolios);
           setActivePortfolioId(migratedPortfolios[0].id);
@@ -389,6 +389,7 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
+  // Portfolio management functions
   const handleCreatePortfolio = (name: string) => {
     const newPortfolio: Portfolio = {
       id: Math.random().toString(36).substr(2, 9),
@@ -396,7 +397,7 @@ const App: React.FC = () => {
       color: PORTFOLIO_COLORS[portfolios.length % PORTFOLIO_COLORS.length],
       assets: [],
       history: [],
-      settings: {},
+      settings: { displayCurrency: 'USD' },
       createdAt: new Date().toISOString()
     };
     setPortfolios([...portfolios, newPortfolio]);
@@ -423,6 +424,7 @@ const App: React.FC = () => {
       if (!confirmed) return;
     }
     
+    // Save to deleted portfolios before removing
     if (portfolio) {
       const deletedPortfolios = JSON.parse(localStorage.getItem('deleted_portfolios') || '[]');
       deletedPortfolios.push({
@@ -461,6 +463,7 @@ const App: React.FC = () => {
                   </svg>
                 </button>
                 
+                {/* Dropdown Menu */}
                 <div className="absolute top-full left-0 mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
                   <div className="p-2 max-h-80 overflow-y-auto">
                     {portfolios.map(portfolio => (
@@ -556,7 +559,6 @@ const App: React.FC = () => {
               }))} 
               onUpdate={handleUpdateAsset} 
               onRetryHistory={() => {}} 
-              onEditTransaction={handleEditTransaction}
             />
           ))}
         </div>

@@ -3,7 +3,17 @@ export interface SourceLink {
   url: string;
 }
 
-export type TransactionTag = 'DCA' | 'FOMO' | 'Strategic' | 'Rebalance' | 'Emergency' | 'Profit-Taking' | 'Research';
+export type TransactionTag = 
+  | 'DCA' 
+  | 'FOMO' 
+  | 'Strategic' 
+  | 'Rebalance' 
+  | 'Emergency' 
+  | 'Profit-Taking' 
+  | 'Research' 
+  | string; // Allow custom tags
+
+export type AssetType = 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'ETF' | 'CASH';
 
 export interface Transaction {
   id: string;
@@ -15,9 +25,6 @@ export interface Transaction {
   tag?: TransactionTag;
   lastEdited?: string;
 }
-
-export type AssetType = 'CRYPTO' | 'STOCK' | 'ETF' | 'CASH';
-export type Currency = 'USD' | 'CHF' | 'EUR';
 
 export interface Asset {
   id: string;
@@ -36,7 +43,7 @@ export interface Asset {
   priceHistory?: number[][];
   targetAllocation?: number;
   assetType?: AssetType;
-  currency?: Currency;
+  currency?: 'USD' | 'CHF';
 }
 
 export interface HistorySnapshot {

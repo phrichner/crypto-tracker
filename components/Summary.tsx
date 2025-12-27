@@ -526,7 +526,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                          </div>
 
                          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Holding Breakdown</div>
-                         <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar">
+                         <div className={`space-y-1.5 ${assets.length > 6 ? 'max-h-[300px] overflow-y-auto' : 'max-h-[400px]'} custom-scrollbar`}>
                             {assets
                                 .map((a, i) => {
                                     const val = hoverData.data.stack[a.id] || 0;

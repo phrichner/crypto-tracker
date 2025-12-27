@@ -28,6 +28,7 @@ const ASSET_TYPE_CONFIG = {
   CRYPTO: { emoji: '🪙', label: 'Crypto', color: 'border-purple-500/50 bg-purple-500/10 text-purple-300' },
   STOCK_US: { emoji: '📈', label: 'US Stock', color: 'border-blue-500/50 bg-blue-500/10 text-blue-300' },
   STOCK_CH: { emoji: '🇨🇭', label: 'Swiss Stock', color: 'border-red-500/50 bg-red-500/10 text-red-300' },
+  STOCK_DE: { emoji: '🇩🇪', label: 'German Stock', color: 'border-yellow-500/50 bg-yellow-500/10 text-yellow-300' },
   ETF: { emoji: '📊', label: 'ETF', color: 'border-teal-500/50 bg-teal-500/10 text-teal-300' },
   CASH: { emoji: '💵', label: 'Cash', color: 'border-gray-500/50 bg-gray-500/10 text-gray-300' }
 };
@@ -117,8 +118,8 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
         )}
       </div>
 
-      <div className="flex justify-between items-start mb-2 gap-4">
-        <div className="flex-shrink-0">
+      <div className="flex justify-between items-start mb-2 pr-2">
+        <div>
           <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
             {asset.name || asset.ticker}
             {asset.error && <AlertCircle size={16} className="text-red-500" />}
@@ -130,11 +131,11 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
           )}
           <p className="text-slate-400 text-sm font-mono">{asset.quantity.toLocaleString()} units</p>
         </div>
-        <div className="text-right flex-shrink-0 pr-2">
-          <p className="text-2xl font-semibold text-slate-100">{currencyFmt.format(currentTotalValue)}</p>
+        <div className="text-right" style={{ maxWidth: 'calc(100% - 150px)' }}>
+          <p className="text-2xl font-semibold text-slate-100 break-words">{currencyFmt.format(currentTotalValue)}</p>
           <div className={`flex items-center justify-end gap-1 text-sm font-medium ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
             {isProfit ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-            <span>{currencyFmt.format(profitLoss)} ({pctFmt.format(profitLossPercent / 100)})</span>
+            <span className="whitespace-nowrap">{currencyFmt.format(profitLoss)} ({pctFmt.format(profitLossPercent / 100)})</span>
           </div>
         </div>
       </div>

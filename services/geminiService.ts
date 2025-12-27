@@ -9,24 +9,51 @@ interface PriceResult {
   rawText: string;
   name?: string;
   symbol?: string;
-  assetType?: 'CRYPTO' | 'STOCK_US' | 'STOCK_CH';
+  assetType?: 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF';
 }
 
-// Detect asset type from ticker
-const detectAssetType = (ticker: string): 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' => {
+const isContractAddress = (input: string): boolean => {
+  const lowerInput = input.toLowerCase();
+  const result = lowerInput.startsWith('0x') && input.length >= 40;
+  console.log('🔍 isContractAddress check:', { input, lowerInput, startsWithOx: lowerInput.startsWith('0x'), length: input.length, result });
+  return result;
+};
+
+// CORRECTED: Proper asset type detection with crypto list FIRST
+const detectAssetType = (ticker: string): 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' => {
   const upperTicker = ticker.toUpperCase();
   
-  // Swiss stocks end with .SW
+  // German stocks (Frankfurt/X exchange)
+  if (upperTicker.endsWith('.DE')) {
+    console.log(`✅ German stock detected: ${ticker}`);
+    return 'STOCK_DE';
+  }
+  
+  // Swiss stocks (SIX exchange)
   if (upperTicker.endsWith('.SW')) {
     console.log(`✅ Swiss stock detected: ${ticker}`);
     return 'STOCK_CH';
   }
   
-  // Known major stocks
+  // PRIORITY 1: Known crypto tickers (check BEFORE stock patterns!)
+  const cryptoTickers = [
+    'BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'MATIC', 'AVAX', 'LINK', 'UNI', 'ATOM',
+    'XRP', 'DOGE', 'SHIB', 'PEPE', 'ARB', 'OP', 'LTC', 'BCH', 'XLM', 'ALGO',
+    'USDT', 'USDC', 'DAI', 'BNB', 'BUSD', 'FTM', 'NEAR', 'ICP', 'APT', 'SUI'
+  ];
+  
+  if (cryptoTickers.includes(upperTicker)) {
+    console.log(`✅ Known crypto detected: ${ticker}`);
+    return 'CRYPTO';
+  }
+  
+  // PRIORITY 2: Known major US stocks
   const knownStocks = [
-    'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD', 'NFLX',
-    'DIS', 'PYPL', 'ADBE', 'INTC', 'CSCO', 'AVGO', 'TXN', 'QCOM', 'AMGN', 'COST',
-    'SBUX', 'MCD', 'NKE', 'BA', 'CAT', 'MMM', 'JNJ', 'PFE', 'MRK', 'UNH'
+    'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD', 
+    'NFLX', 'DIS', 'V', 'MA', 'JPM', 'BAC', 'WMT', 'PG', 'JNJ', 'UNH', 'HD',
+    'CVX', 'XOM', 'PFE', 'KO', 'PEP', 'ABBV', 'MRK', 'COST', 'TMO', 'ABT',
+    'PYPL', 'ADBE', 'INTC', 'CSCO', 'AVGO', 'TXN', 'QCOM', 'AMGN',
+    'SBUX', 'MCD', 'NKE', 'BA', 'CAT', 'MMM', 'GE', 'IBM', 'F', 'GM'
   ];
   
   if (knownStocks.includes(upperTicker)) {
@@ -34,20 +61,16 @@ const detectAssetType = (ticker: string): 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' => 
     return 'STOCK_US';
   }
   
-  // Pattern matching: 1-4 letter tickers are likely stocks
+  // PRIORITY 3: Pattern matching (1-4 letters could be stock)
+  // BUT only if not already identified as crypto above
   if (/^[A-Z]{1,4}$/.test(upperTicker)) {
-    console.log(`🔍 Pattern suggests US stock: ${ticker}`);
+    console.log(`🔍 Auto-detected type: STOCK_US for ticker: ${ticker}`);
     return 'STOCK_US';
   }
   
-  // Everything else is crypto
-  console.log(`🔍 Detected as crypto: ${ticker}`);
+  // Default to crypto for longer tickers
+  console.log(`🔍 Defaulting to crypto: ${ticker}`);
   return 'CRYPTO';
-};
-
-const isContractAddress = (input: string): boolean => {
-  const lowerInput = input.toLowerCase();
-  return lowerInput.startsWith('0x') && input.length >= 40;
 };
 
 // Save price snapshot to localStorage
@@ -119,13 +142,13 @@ const saveHistoricalData = (ticker: string, historyData: [number, number][]) => 
   }
 };
 
-// SIMPLIFIED: Fetch stock price AND history from Yahoo Finance (no rate limits!)
-const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH'): Promise<PriceResult> => {
+// Fetch stock price AND history from Yahoo Finance
+const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE'): Promise<PriceResult> => {
   console.log(`📈 Fetching stock from Yahoo Finance: ${ticker} (${assetType})`);
   
   const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=1y&interval=1d`;
   
-  // Try multiple CORS proxies (allorigins.win is often down)
+  // Try multiple CORS proxies
   const corsProxies = [
     `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
     `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`,
@@ -145,23 +168,22 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
       
       if (!res.ok) {
         console.warn(`⚠️ Proxy ${proxyName} returned status ${res.status}`);
-        continue; // Try next proxy
+        continue;
       }
       
       let data;
       
-      // allorigins.win wraps response in {contents: "..."}
+      // allorigins.win wraps response
       if (proxyName === 'allorigins.win') {
         const proxyData = await res.json();
         data = JSON.parse(proxyData.contents);
       } else {
-        // Other proxies return data directly
         data = await res.json();
       }
       
       if (!data.chart?.result?.[0]) {
-        console.warn(`⚠️ Invalid response structure from ${proxyName}`);
-        continue; // Try next proxy
+        console.warn(`⚠️ Invalid response from ${proxyName}`);
+        continue;
       }
       
       const result = data.chart.result[0];
@@ -169,7 +191,7 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
       
       if (!price || price <= 0) {
         console.warn(`⚠️ Invalid price from ${proxyName}`);
-        continue; // Try next proxy
+        continue;
       }
       
       // Get company name
@@ -182,10 +204,9 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
       
       console.log(`✅ Yahoo Finance SUCCESS (via ${proxyName}): ${companyName} = $${price}`);
       
-      // Save current price
       savePriceSnapshot(ticker, price);
       
-      // Extract historical data (timestamps and closes)
+      // Extract historical data
       const timestamps = result.timestamp || [];
       const closes = result.indicators?.quote?.[0]?.close || [];
       
@@ -193,7 +214,7 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
         const historyData: [number, number][] = [];
         
         for (let i = 0; i < timestamps.length; i++) {
-          const timestamp = timestamps[i] * 1000; // Convert to milliseconds
+          const timestamp = timestamps[i] * 1000;
           const close = closes[i];
           
           if (close && close > 0 && !isNaN(close)) {
@@ -227,17 +248,14 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
     } catch (error: any) {
       console.warn(`❌ Proxy ${proxyName} failed:`, error.message);
       if (i === corsProxies.length - 1) {
-        // Last proxy failed, throw error
         throw new Error(`All CORS proxies failed. Last error: ${error.message}`);
       }
-      // Otherwise continue to next proxy
     }
   }
   
   throw new Error('All CORS proxies failed to fetch Yahoo Finance data');
 };
 
-// Fetch DEX token price
 export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<PriceResult> => {
   console.log('🚀 fetchTokenPriceFromDex called with:', contractAddress);
   
@@ -318,12 +336,11 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
       price,
       name: tokenName,
       symbol: tokenSymbol,
-      assetType: 'CRYPTO' as const,
       sources: [{
         title: `${bestPair.dexId} (${bestPair.chainId}) - Liq: $${liquidityUsdFormatted}M`,
         url: bestPair.url || `https://dexscreener.com/${bestPair.chainId}/${bestPair.pairAddress}`
       }],
-      rawText: `${tokenName} (${tokenSymbol}) - $${price}`
+      rawText: `${tokenName} (${tokenSymbol}) - $${price} from ${bestPair.dexId} on ${bestPair.chainId}`
     };
     
     console.log('✅ fetchTokenPriceFromDex SUCCESS:', result);
@@ -335,7 +352,6 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
   }
 };
 
-// Main fetch function - routes to appropriate API
 export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => {
   console.log('🔵 ========================================');
   console.log('🔵 fetchCryptoPrice START:', ticker);
@@ -347,18 +363,17 @@ export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => 
     return fetchTokenPriceFromDex(ticker);
   }
   
-  // Auto-detect asset type
+  // Detect asset type
   const assetType = detectAssetType(ticker);
-  console.log('🔍 Auto-detected type:', assetType, 'for ticker:', ticker);
   
   // Stocks → Yahoo Finance
-  if (assetType === 'STOCK_US' || assetType === 'STOCK_CH') {
+  if (assetType === 'STOCK_US' || assetType === 'STOCK_CH' || assetType === 'STOCK_DE') {
     console.log('📈 Routing to Yahoo Finance (stocks)...');
     return fetchYahooStock(ticker, assetType);
   }
   
   // Crypto → Gemini AI
-  console.log('🪙 Routing to Gemini AI (crypto)...');
+  console.log('📍 Routing to Gemini AI (crypto)...');
   
   try {
     const apiKey = localStorage.getItem('gemini_api_key') || '';
@@ -397,34 +412,28 @@ Return ONLY the current numeric price value in USD. No symbols, no explanations.
       .filter(c => c.web && c.web.uri)
       .map(c => ({ title: c.web.title || 'Source', url: c.web.uri }));
 
-    return { 
-      price, 
-      sources, 
-      rawText: text,
-      name: ticker,
-      symbol: ticker,
-      assetType: 'CRYPTO'
-    };
+    return { price, sources, rawText: text, assetType: 'CRYPTO' };
   } catch (error: any) {
-    console.error('❌ Crypto fetch error:', error);
-    throw new Error(error.message || "Failed to fetch crypto price");
+    throw new Error(error.message || "Failed to fetch price");
   }
 };
 
-// Fetch historical data
-export const fetchAssetHistory = async (ticker: string, currentPrice?: number, tokenSymbol?: string): Promise<number[][] | undefined> => {
-  const assetType = detectAssetType(ticker);
-  
-  // For stocks, Yahoo Finance already fetched history in fetchYahooStock
-  // Just return what's in localStorage
-  if (assetType === 'STOCK_US' || assetType === 'STOCK_CH') {
-    console.log('📈 Stock history already fetched by Yahoo Finance');
+export const fetchAssetHistory = async (ticker: string, currentPrice?: number, tokenSymbol?: string, assetType?: string): Promise<number[][] | undefined> => {
+  // For stocks, history was already fetched with price!
+  if (assetType === 'STOCK_US' || assetType === 'STOCK_CH' || assetType === 'STOCK_DE') {
+    console.log(`📦 Stock history already saved for ${ticker}, loading from localStorage`);
     return loadPriceSnapshots(ticker);
   }
   
-  // Contract addresses: try CryptoCompare with symbol, then CoinGecko
+  // For crypto, continue with existing logic
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const daysThreshold = 365;
+  
+  // For contract addresses with known symbol, try CryptoCompare first
   if (isContractAddress(ticker) && tokenSymbol) {
     try {
+      console.log(`📈 Trying CryptoCompare for DEX token symbol: ${tokenSymbol}`);
+      
       const res = await fetch(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${tokenSymbol.toUpperCase()}&tsym=USD&limit=2000`);
       
       if (res.ok) {
@@ -435,27 +444,54 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
             .map((d: any) => [d.time * 1000, d.close])
             .filter((p: any) => p[1] > 0);
           
-          if (historyData.length >= 365) {
-            const localSnapshots = loadPriceSnapshots(ticker);
-            const merged = mergeHistoryWithSnapshots(historyData, localSnapshots);
-            saveHistoricalData(ticker, merged);
-            return merged;
+          console.log(`📊 CryptoCompare returned ${historyData.length} data points`);
+          
+          if (historyData.length >= daysThreshold) {
+            if (currentPrice && historyData.length > 0) {
+              const latestHistoricalPrice = historyData[historyData.length - 1][1];
+              const priceRatio = latestHistoricalPrice / currentPrice;
+              
+              console.log(`🔍 Price verification: Historical=${latestHistoricalPrice}, Current=${currentPrice}, Ratio=${priceRatio}`);
+              
+              if (priceRatio >= 0.5 && priceRatio <= 2.0) {
+                console.log(`✅ CryptoCompare has ${historyData.length} days - using it!`);
+                const localSnapshots = loadPriceSnapshots(ticker);
+                const merged = mergeHistoryWithSnapshots(historyData, localSnapshots);
+                saveHistoricalData(ticker, merged);
+                return merged;
+              } else {
+                console.warn(`⚠️ Price mismatch - trying CoinGecko instead`);
+              }
+            } else {
+              console.log(`✅ CryptoCompare has ${historyData.length} days - using it`);
+              const localSnapshots = loadPriceSnapshots(ticker);
+              const merged = mergeHistoryWithSnapshots(historyData, localSnapshots);
+              saveHistoricalData(ticker, merged);
+              return merged;
+            }
+          } else {
+            console.log(`⚠️ CryptoCompare only has ${historyData.length} days`);
           }
         }
       }
     } catch (e) {
       console.warn('⚠️ CryptoCompare fetch failed:', e);
     }
-    
-    // Try CoinGecko
+  }
+  
+  // For contract addresses, try CoinGecko
+  if (isContractAddress(ticker)) {
     try {
       const normalizedAddress = ticker.toLowerCase();
+      console.log('📈 Fetching history from CoinGecko (365 days):', normalizedAddress);
+      
       const res = await fetch(
         `https://api.coingecko.com/api/v3/coins/ethereum/contract/${normalizedAddress}/market_chart/?vs_currency=usd&days=365`
       );
       
       if (res.ok) {
         const json = await res.json();
+        console.log('✅ CoinGecko history received:', json.prices?.length, 'data points');
         
         if (json.prices && json.prices.length > 0) {
           const apiHistory = json.prices.filter((p: any) => p[1] > 0);
@@ -464,20 +500,24 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
           saveHistoricalData(ticker, merged);
           return merged;
         }
+      } else {
+        console.warn('⚠️ CoinGecko API returned status:', res.status);
       }
     } catch (e) {
       console.warn('⚠️ CoinGecko history fetch failed:', e);
     }
     
+    // Fallback to local snapshots
     const localSnapshots = loadPriceSnapshots(ticker);
     if (localSnapshots.length > 0) {
+      console.log(`📦 Using ${localSnapshots.length} local snapshots only`);
       return localSnapshots;
     }
     
     return undefined;
   }
   
-  // Regular crypto tickers: use CryptoCompare
+  // For regular crypto tickers, use CryptoCompare
   try {
      const res = await fetch(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${ticker.toUpperCase()}&tsym=USD&limit=2000`);
      if (res.ok) {
@@ -490,9 +530,6 @@ export const fetchAssetHistory = async (ticker: string, currentPrice?: number, t
            return merged;
         }
      }
-  } catch (e) { 
-    console.warn(e); 
-  }
-  
+  } catch (e) { console.warn(e); }
   return undefined;
 };

@@ -13,7 +13,7 @@ export type TransactionTag =
   | 'Research' 
   | string; // Allow custom tags
 
-export type AssetType = 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'ETF' | 'CASH';
+export type AssetType = 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' | 'CASH';
 
 // Supported currencies
 export type Currency = 'USD' | 'CHF' | 'EUR' | 'GBP' | 'JPY' | 'CAD' | 'AUD';

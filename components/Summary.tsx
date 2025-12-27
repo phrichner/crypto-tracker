@@ -496,6 +496,21 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                         );
                     })}
                  </div>
+                 {/* Show All Button - Only display if more than 6 assets */}
+                 {pieChartData.sortedAssets.length > 6 && (
+                   <div className="mt-3 text-center">
+                     <button
+                       onClick={() => setShowAllAssets(!showAllAssets)}
+                       className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors flex items-center gap-1 mx-auto"
+                     >
+                       {showAllAssets ? (
+                         <>Show less ▲</>
+                       ) : (
+                         <>Show {pieChartData.sortedAssets.length - 6} more ▼</>
+                       )}
+                     </button>
+                   </div>
+                 )}
             </div>
         </div>
       </div>
@@ -583,7 +598,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                          </div>
 
                          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Holding Breakdown</div>
-                         <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar">
+                         <div className={`space-y-1.5 ${assets.length > 6 ? 'max-h-[300px] overflow-y-auto' : 'max-h-[400px]'} custom-scrollbar`}>
                             {assets
                                 .map((a, i) => {
                                     const val = hoverData.data.stack[a.id] || 0;

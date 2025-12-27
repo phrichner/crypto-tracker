@@ -29,6 +29,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
   const [customEnd, setCustomEnd] = useState('');
   const [hoverData, setHoverData] = useState<{ x: number, y: number, data: ChartDataPoint } | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [showAllAssets, setShowAllAssets] = useState(false);
 
   const formattedTotal = new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -379,7 +380,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
             <div className="flex-1 w-full">
                  {/* Dynamic layout: 1 column for ≤3 assets, 2 columns for 4+ assets */}
-                 <div className={`grid gap-x-8 gap-y-2 ${pieChartData.sortedAssets.slice(0, 6).length <= 3 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
+                 <div className={`grid gap-x-8 gap-y-2 ${(showAllAssets ? pieChartData.sortedAssets : pieChartData.sortedAssets.slice(0, 6)).length <= 3 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
                     {/* Column headers - repeated for each column in 2-col layout */}
                     {pieChartData.sortedAssets.slice(0, 6).length <= 3 ? (
                         <div className="text-xs font-medium text-slate-400 mb-1 border-b border-slate-700 pb-2 grid grid-cols-4 gap-4">
@@ -405,7 +406,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                         </>
                     )}
                     
-                    {pieChartData.sortedAssets.slice(0, 6).map((asset, index) => {
+                    {(showAllAssets ? pieChartData.sortedAssets : pieChartData.sortedAssets.slice(0, 6)).map((asset, index) => {
                         const currentPct = (asset.value / summary.totalValue) * 100;
                         const target = asset.targetAllocation || 0;
                         const deviation = target > 0 ? currentPct - target : 0;
@@ -445,6 +446,21 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                         );
                     })}
                  </div>
+                 {/* Show All Button - Only display if more than 6 assets */}
+                 {pieChartData.sortedAssets.length > 6 && (
+                   <div className="mt-3 text-center">
+                     <button
+                       onClick={() => setShowAllAssets(!showAllAssets)}
+                       className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors flex items-center gap-1 mx-auto"
+                     >
+                       {showAllAssets ? (
+                         <>Show less ▲</>
+                       ) : (
+                         <>Show {pieChartData.sortedAssets.length - 6} more ▼</>
+                       )}
+                     </button>
+                   </div>
+                 )}
             </div>
         </div>
       </div>

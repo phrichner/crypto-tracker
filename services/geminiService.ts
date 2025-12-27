@@ -9,7 +9,7 @@ interface PriceResult {
   rawText: string;
   name?: string;
   symbol?: string;
-  assetType?: 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF';
+  assetType?: 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' | 'CASH';
 }
 
 const isContractAddress = (input: string): boolean => {
@@ -20,8 +20,15 @@ const isContractAddress = (input: string): boolean => {
 };
 
 // CORRECTED: Proper asset type detection with crypto list FIRST
-const detectAssetType = (ticker: string): 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' => {
+const detectAssetType = (ticker: string): 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' | 'CASH' => {
   const upperTicker = ticker.toUpperCase();
+  
+  // CASH: Fiat currency codes (3-letter ISO codes) + stablecoins
+  const cashCurrencies = ['USD', 'EUR', 'CHF', 'GBP', 'JPY', 'CAD', 'AUD', 'NZD', 'SEK', 'NOK', 'DKK', 'USDT', 'USDC'];
+  if (cashCurrencies.includes(upperTicker)) {
+    console.log(`✅ Cash/Currency detected: ${ticker}`);
+    return 'CASH';
+  }
   
   // German stocks (Frankfurt/X exchange)
   if (upperTicker.endsWith('.DE')) {
@@ -39,7 +46,7 @@ const detectAssetType = (ticker: string): 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | '
   const cryptoTickers = [
     'BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'MATIC', 'AVAX', 'LINK', 'UNI', 'ATOM',
     'XRP', 'DOGE', 'SHIB', 'PEPE', 'ARB', 'OP', 'LTC', 'BCH', 'XLM', 'ALGO',
-    'USDT', 'USDC', 'DAI', 'BNB', 'BUSD', 'FTM', 'NEAR', 'ICP', 'APT', 'SUI'
+    'DAI', 'BNB', 'BUSD', 'FTM', 'NEAR', 'ICP', 'APT', 'SUI'
   ];
   
   if (cryptoTickers.includes(upperTicker)) {
@@ -365,6 +372,38 @@ export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => 
   
   // Detect asset type
   const assetType = detectAssetType(ticker);
+  
+  // CASH → Return 1.0 (cash is always 1:1 in its own currency)
+  if (assetType === 'CASH') {
+    console.log('💵 Cash asset detected, returning price = 1.0');
+    const currencyNames: Record<string, string> = {
+      'USD': 'US Dollar',
+      'EUR': 'Euro',
+      'CHF': 'Swiss Franc',
+      'GBP': 'British Pound',
+      'JPY': 'Japanese Yen',
+      'CAD': 'Canadian Dollar',
+      'AUD': 'Australian Dollar',
+      'NZD': 'New Zealand Dollar',
+      'SEK': 'Swedish Krona',
+      'NOK': 'Norwegian Krone',
+      'DKK': 'Danish Krone',
+      'USDT': 'Tether USD',
+      'USDC': 'USD Coin'
+    };
+    
+    return {
+      price: 1.0,
+      name: currencyNames[ticker.toUpperCase()] || ticker.toUpperCase(),
+      symbol: ticker.toUpperCase(),
+      assetType: 'CASH',
+      sources: [{
+        title: 'Cash/Currency',
+        url: '#'
+      }],
+      rawText: `${currencyNames[ticker.toUpperCase()] || ticker} - Cash Asset`
+    };
+  }
   
   // Stocks → Yahoo Finance
   if (assetType === 'STOCK_US' || assetType === 'STOCK_CH' || assetType === 'STOCK_DE') {

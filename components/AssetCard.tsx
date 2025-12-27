@@ -106,33 +106,35 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
 
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-lg relative overflow-hidden transition-all hover:border-slate-600">
-      {/* Asset Type Badge - Top Right */}
-      <div className={`absolute top-3 right-3 px-2 py-1 rounded-md border text-[10px] font-bold flex items-center gap-1 ${assetTypeConfig.color}`}>
-        <span>{assetTypeConfig.emoji}</span>
-        <span>{assetTypeConfig.label}</span>
-        {/* Currency Badge - Only show for non-USD */}
-        {asset.currency && asset.currency !== 'USD' && (
-          <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
-            {asset.currency}
-          </span>
-        )}
-      </div>
-
-      <div className="flex justify-between items-start mb-2 pr-2">
-        <div>
-          <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
-            {asset.name || asset.ticker}
-            {asset.error && <AlertCircle size={16} className="text-red-500" />}
-            {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
-            {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
-          </h3>
+      
+      <div className="flex justify-between items-start mb-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-xl font-bold text-slate-100 uppercase flex items-center gap-2">
+              {asset.name || asset.ticker}
+              {asset.error && <AlertCircle size={16} className="text-red-500" />}
+              {hasHistory ? <Signal size={16} className="text-emerald-500/80" /> : <SignalLow size={16} className="text-slate-600" />}
+              {isDeviationSignificant && <AlertTriangle size={16} className={deviation > 0 ? 'text-amber-500' : 'text-blue-400'} />}
+            </h3>
+            {/* Asset Type Badge - Inline next to title */}
+            <div className={`px-2 py-0.5 rounded-md border text-[9px] font-bold flex items-center gap-1 flex-shrink-0 ${assetTypeConfig.color}`}>
+              <span>{assetTypeConfig.emoji}</span>
+              <span>{assetTypeConfig.label}</span>
+              {/* Currency Badge - Only show for non-USD */}
+              {asset.currency && asset.currency !== 'USD' && (
+                <span className="ml-1 px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  {asset.currency}
+                </span>
+              )}
+            </div>
+          </div>
           {asset.name && isContractAddress && (
             <p className="text-slate-500 text-xs font-mono mb-1">{asset.ticker.slice(0, 10)}...{asset.ticker.slice(-8)}</p>
           )}
           <p className="text-slate-400 text-sm font-mono">{asset.quantity.toLocaleString()} units</p>
         </div>
-        <div className="text-right" style={{ maxWidth: 'calc(100% - 150px)' }}>
-          <p className="text-2xl font-semibold text-slate-100 break-words">{currencyFmt.format(currentTotalValue)}</p>
+        <div className="text-right ml-4 flex-shrink-0">
+          <p className="text-2xl font-semibold text-slate-100 whitespace-nowrap">{currencyFmt.format(currentTotalValue)}</p>
           <div className={`flex items-center justify-end gap-1 text-sm font-medium ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
             {isProfit ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
             <span className="whitespace-nowrap">{currencyFmt.format(profitLoss)} ({pctFmt.format(profitLossPercent / 100)})</span>

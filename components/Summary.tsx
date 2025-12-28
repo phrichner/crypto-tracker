@@ -83,6 +83,28 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
   // --- Stacked Area Chart Logic ---
   const { Chart, xAxisLabels, yAxisLabels, chartData, maxY } = useMemo(() => {
+    // Helper: Detect currency from ticker
+    const detectCurrencyFromTicker = (ticker: string): string => {
+      // Cash/Currency codes
+      if (['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD'].includes(ticker.toUpperCase())) {
+        return ticker.toUpperCase();
+      }
+      // Swiss stocks (.SW suffix)
+      if (ticker.endsWith('.SW')) {
+        return 'CHF';
+      }
+      // UK stocks (.L suffix)
+      if (ticker.endsWith('.L')) {
+        return 'GBP';
+      }
+      // Tokyo stocks (.T suffix)
+      if (ticker.endsWith('.T')) {
+        return 'JPY';
+      }
+      // Default to USD (US stocks, crypto, etc.)
+      return 'USD';
+    };
+
     // Early return if exchange rates not loaded yet
     if (!ratesLoaded) {
       return { 
@@ -160,9 +182,12 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                 return;
             }
 
-            // Convert cost to USD for aggregation
-            const costInUSD = convertToDisplayCurrency(costAtTime, asset.currency || 'USD');
-            costStack[asset.id] = costInUSD;
+            // Detect currency from ticker/asset
+            const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
+            
+            // Convert cost to display currency
+            const costInDisplay = convertToDisplayCurrency(costAtTime, assetCurrency);
+            costStack[asset.id] = costInDisplay;
 
             // B. Find Price at time t - SIMPLIFIED LOGIC
             let estimatedPrice = asset.currentPrice;
@@ -216,12 +241,12 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
             }
 
             const valInNativeCurrency = qtyAtTime * estimatedPrice;
-            // Convert to USD for chart aggregation
-            const valInUSD = convertToDisplayCurrency(valInNativeCurrency, asset.currency || 'USD');
+            // Convert to display currency
+            const valInDisplay = convertToDisplayCurrency(valInNativeCurrency, assetCurrency);
             
-            stack[asset.id] = valInUSD;
-            totalVal += valInUSD;
-            totalCost += costInUSD;
+            stack[asset.id] = valInDisplay;
+            totalVal += valInDisplay;
+            totalCost += costInDisplay;
         });
 
         generatedData.push({

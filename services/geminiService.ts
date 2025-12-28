@@ -10,6 +10,7 @@ interface PriceResult {
   name?: string;
   symbol?: string;
   assetType?: 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' | 'CASH';
+  currency?: string; // NEW: Currency for the asset (USD, CHF, EUR, etc.)
 }
 
 const isContractAddress = (input: string): boolean => {
@@ -209,7 +210,15 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
         companyName = result.meta.shortName;
       }
       
-      console.log(`✅ Yahoo Finance SUCCESS (via ${proxyName}): ${companyName} = $${price}`);
+      // Determine currency based on asset type
+      let currency = 'USD'; // Default for STOCK_US
+      if (assetType === 'STOCK_CH') {
+        currency = 'CHF';
+      } else if (assetType === 'STOCK_DE') {
+        currency = 'EUR';
+      }
+      
+      console.log(`✅ Yahoo Finance SUCCESS (via ${proxyName}): ${companyName} = ${price} ${currency}`);
       
       savePriceSnapshot(ticker, price);
       
@@ -245,11 +254,12 @@ const fetchYahooStock = async (ticker: string, assetType: 'STOCK_US' | 'STOCK_CH
         name: companyName,
         symbol: ticker,
         assetType,
+        currency, // ✅ NEW: Currency field based on stock exchange
         sources: [{
           title: 'Yahoo Finance',
           url: `https://finance.yahoo.com/quote/${ticker}`
         }],
-        rawText: `${companyName} (${ticker}) - $${price}`
+        rawText: `${companyName} (${ticker}) - ${price} ${currency}`
       };
       
     } catch (error: any) {
@@ -343,6 +353,7 @@ export const fetchTokenPriceFromDex = async (contractAddress: string): Promise<P
       price,
       name: tokenName,
       symbol: tokenSymbol,
+      currency: 'USD', // DEX prices are always in USD
       sources: [{
         title: `${bestPair.dexId} (${bestPair.chainId}) - Liq: $${liquidityUsdFormatted}M`,
         url: bestPair.url || `https://dexscreener.com/${bestPair.chainId}/${bestPair.pairAddress}`
@@ -392,16 +403,19 @@ export const fetchCryptoPrice = async (ticker: string): Promise<PriceResult> => 
       'USDC': 'USD Coin'
     };
     
+    const tickerUpper = ticker.toUpperCase();
+    
     return {
       price: 1.0,
-      name: currencyNames[ticker.toUpperCase()] || ticker.toUpperCase(),
-      symbol: ticker.toUpperCase(),
+      name: currencyNames[tickerUpper] || tickerUpper,
+      symbol: tickerUpper,
       assetType: 'CASH',
+      currency: tickerUpper, // ✅ NEW: Cash currency is the ticker itself
       sources: [{
         title: 'Cash/Currency',
         url: '#'
       }],
-      rawText: `${currencyNames[ticker.toUpperCase()] || ticker} - Cash Asset`
+      rawText: `${currencyNames[tickerUpper] || ticker} - Cash Asset`
     };
   }
   
@@ -451,7 +465,13 @@ Return ONLY the current numeric price value in USD. No symbols, no explanations.
       .filter(c => c.web && c.web.uri)
       .map(c => ({ title: c.web.title || 'Source', url: c.web.uri }));
 
-    return { price, sources, rawText: text, assetType: 'CRYPTO' };
+    return { 
+      price, 
+      sources, 
+      rawText: text, 
+      assetType: 'CRYPTO',
+      currency: 'USD' // Crypto prices are in USD
+    };
   } catch (error: any) {
     throw new Error(error.message || "Failed to fetch price");
   }

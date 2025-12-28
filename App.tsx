@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag, Currency } from './types';
 import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
-import { convertCurrency } from './services/currencyService';
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
 import { Summary } from './components/Summary';
@@ -105,50 +104,30 @@ const App: React.FC = () => {
   const assets = activePortfolio?.assets || [];
   const history = activePortfolio?.history || [];
 
-  // Calculate summary with USD conversion
-  const [summary, setSummary] = useState<PortfolioSummary>({
-    totalValue: 0,
-    totalCostBasis: 0,
-    totalPnL: 0,
-    totalPnLPercent: 0,
-    assetCount: 0,
-    lastGlobalUpdate: null
-  });
+  // Calculate summary - values are aggregated by Summary.tsx with currency conversion
+  const summary: PortfolioSummary = useMemo(() => {
+    // Don't convert currencies here - Summary.tsx handles display currency conversion
+    // Just aggregate the raw values in their native currencies
+    const assetData = assets.map(asset => ({
+      value: asset.quantity * asset.currentPrice,
+      costBasis: asset.totalCostBasis,
+      currency: asset.currency || 'USD'
+    }));
 
-  useEffect(() => {
-    const calculateSummary = async () => {
-      let totalValueUSD = 0;
-      let totalCostBasisUSD = 0;
-
-      for (const asset of assets) {
-        const assetValue = asset.quantity * asset.currentPrice;
-        const assetCurrency = asset.currency || 'USD';
-        
-        // Convert to USD for aggregation
-        const assetValueUSD = await convertCurrency(assetValue, assetCurrency, 'USD');
-        const costBasisUSD = await convertCurrency(asset.totalCostBasis, assetCurrency, 'USD');
-        
-        totalValueUSD += assetValueUSD;
-        totalCostBasisUSD += costBasisUSD;
-      }
-
-      const pnl = totalValueUSD - totalCostBasisUSD;
-      const pnlPercent = totalCostBasisUSD > 0 ? (pnl / totalCostBasisUSD) * 100 : 0;
-
-      setSummary({
-        totalValue: totalValueUSD,
-        totalCostBasis: totalCostBasisUSD,
-        totalPnL: pnl,
-        totalPnLPercent: pnlPercent,
-        assetCount: assets.length,
-        lastGlobalUpdate: assets.reduce((latest, a) => 
-          a.lastUpdated > latest ? a.lastUpdated : latest, 
-          assets[0]?.lastUpdated || null
-        )
-      });
+    // For a multi-currency portfolio, we can't accurately calculate totals here
+    // Summary.tsx will convert each asset to display currency and sum them
+    // For now, return placeholder values that Summary.tsx will override
+    return {
+      totalValue: 0, // Will be calculated in Summary.tsx
+      totalCostBasis: 0, // Will be calculated in Summary.tsx
+      totalPnL: 0, // Will be calculated in Summary.tsx
+      totalPnLPercent: 0, // Will be calculated in Summary.tsx
+      assetCount: assets.length,
+      lastGlobalUpdate: assets.reduce((latest, a) => 
+        a.lastUpdated > latest ? a.lastUpdated : latest, 
+        assets[0]?.lastUpdated || null
+      )
     };
-
-    calculateSummary();
   }, [assets]);
 
   useEffect(() => {

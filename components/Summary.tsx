@@ -14,6 +14,28 @@ const CHART_COLORS = [
   '#6366f1', '#10b981', '#0ea5e9', '#f59e0b', '#f43f5e', '#a855f7', '#ec4899', '#06b6d4'
 ];
 
+// Helper function to detect currency from ticker when asset.currency is missing
+const detectCurrencyFromTicker = (ticker: string): string => {
+  const upper = ticker.toUpperCase();
+  
+  // Cash currencies
+  if (upper === 'CHF' || upper === 'EUR' || upper === 'GBP' || 
+      upper === 'JPY' || upper === 'CAD' || upper === 'AUD') {
+    return upper;
+  }
+  
+  // Stock exchanges
+  if (upper.endsWith('.SW')) return 'CHF'; // Swiss stocks
+  if (upper.endsWith('.DE') || upper.endsWith('.F')) return 'EUR'; // German stocks
+  if (upper.endsWith('.L')) return 'GBP'; // London stocks
+  if (upper.endsWith('.T')) return 'JPY'; // Tokyo stocks
+  if (upper.endsWith('.TO')) return 'CAD'; // Toronto stocks
+  if (upper.endsWith('.AX')) return 'AUD'; // Australian stocks
+  
+  // Default to USD for crypto and US stocks
+  return 'USD';
+};
+
 type TimeRange = '24H' | '1W' | '1M' | 'ALL' | 'CUSTOM';
 
 interface ChartDataPoint {
@@ -50,36 +72,72 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
   // This is a wrapper around convertCurrencySync that uses the loaded exchange rates
   const convertToDisplayCurrency = (value: number, fromCurrency: string, toCurrency: string = 'USD'): number => {
     if (!ratesLoaded) {
-      console.error('⚠️ convertToDisplayCurrency called before rates loaded');
-      return 0; // Return 0 to prevent incorrect chart data
+      console.warn('⚠️ convertToDisplayCurrency called before rates loaded - returning original value');
+      return value; // Return original value as fallback (better than 0)
     }
     return convertCurrencySync(value, fromCurrency, toCurrency, exchangeRates);
   };
 
-  // P4 CHANGE: Convert total value to selected currency
-  const convertedTotalValue = convertToDisplayCurrency(summary.totalValue, 'USD', displayCurrency);
-  const formattedTotal = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: displayCurrency,
-    maximumFractionDigits: 0
-  }).format(convertedTotalValue);
+  // P4 CHANGE: Calculate totals from assets (converting each to display currency)
+  const { convertedTotalValue, convertedCostBasis, convertedPnL, formattedTotal, formattedPnL, pnlPercent } = useMemo(() => {
+    if (!ratesLoaded) {
+      // Return placeholder values while rates are loading
+      return {
+        convertedTotalValue: 0,
+        convertedCostBasis: 0,
+        convertedPnL: 0,
+        formattedTotal: '...',
+        formattedPnL: '...',
+        pnlPercent: 0
+      };
+    }
 
-  // P4 CHANGE: Convert P&L to selected currency
-  const convertedPnL = convertToDisplayCurrency(summary.totalPnL, 'USD', displayCurrency);
-  const formattedPnL = new Intl.NumberFormat('en-US', {
-     style: 'currency',
-     currency: displayCurrency,
-     maximumFractionDigits: 0,
-     signDisplay: "always"
-  }).format(convertedPnL);
+    // Calculate totals by converting each asset to display currency
+    let totalValue = 0;
+    let totalCostBasis = 0;
+
+    for (const asset of assets) {
+      const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
+      const assetValue = asset.quantity * asset.currentPrice;
+      const assetCostBasis = asset.totalCostBasis;
+
+      // Convert to display currency
+      const valueInDisplay = convertToDisplayCurrency(assetValue, assetCurrency, displayCurrency);
+      const costInDisplay = convertToDisplayCurrency(assetCostBasis, assetCurrency, displayCurrency);
+
+      totalValue += valueInDisplay;
+      totalCostBasis += costInDisplay;
+    }
+
+    const pnl = totalValue - totalCostBasis;
+    const pnlPct = totalCostBasis > 0 ? (pnl / totalCostBasis) * 100 : 0;
+
+    return {
+      convertedTotalValue: totalValue,
+      convertedCostBasis: totalCostBasis,
+      convertedPnL: pnl,
+      formattedTotal: new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: displayCurrency,
+        maximumFractionDigits: 0
+      }).format(totalValue),
+      formattedPnL: new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: displayCurrency,
+        maximumFractionDigits: 0,
+        signDisplay: "always"
+      }).format(pnl),
+      pnlPercent: pnlPct
+    };
+  }, [ratesLoaded, assets, displayCurrency, exchangeRates]);
   
   const formattedPnLPct = new Intl.NumberFormat('en-US', {
     style: 'percent',
     minimumFractionDigits: 2,
     signDisplay: "always"
-  }).format(summary.totalPnLPercent / 100);
+  }).format(pnlPercent / 100);
 
-  const isProfit = summary.totalPnL >= 0;
+  const isProfit = convertedPnL >= 0;
 
   // --- Stacked Area Chart Logic ---
   const { Chart, xAxisLabels, yAxisLabels, chartData, maxY } = useMemo(() => {
@@ -383,21 +441,22 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
   const handleMouseLeave = () => setHoverData(null);
 
   const pieChartData = useMemo(() => {
-    if (summary.totalValue === 0) return { gradient: `conic-gradient(#334155 0% 100%)`, sortedAssets: [] };
+    if (!ratesLoaded || convertedTotalValue === 0) return { gradient: `conic-gradient(#334155 0% 100%)`, sortedAssets: [] };
     
     const sorted = [...assets]
       .map(asset => {
-        // Convert asset value to USD for comparison
+        // Convert asset value to display currency
+        const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
         const valueInNativeCurrency = asset.quantity * asset.currentPrice;
-        const valueInUSD = convertToDisplayCurrency(valueInNativeCurrency, asset.currency || 'USD');
-        return { ...asset, value: valueInUSD };
+        const valueInDisplay = convertToDisplayCurrency(valueInNativeCurrency, assetCurrency, displayCurrency);
+        return { ...asset, value: valueInDisplay };
       })
       .sort((a, b) => b.value - a.value);
 
     let cumulative = 0;
     const segs: string[] = [];
     sorted.forEach((a, i) => {
-        const pct = (a.value / summary.totalValue) * 100;
+        const pct = (a.value / convertedTotalValue) * 100;
         const color = CHART_COLORS[i % CHART_COLORS.length];
         segs.push(`${color} ${cumulative}% ${cumulative + pct}%`);
         cumulative += pct;
@@ -407,7 +466,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
         gradient: `conic-gradient(${segs.join(', ')})`,
         sortedAssets: sorted
     };
-  }, [summary.totalValue, assets]);
+  }, [convertedTotalValue, assets, ratesLoaded, displayCurrency, exchangeRates]);
 
   return (
     <div className="space-y-4 mb-8">
@@ -493,7 +552,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                     )}
                     
                     {pieChartData.sortedAssets.slice(0, 6).map((asset, index) => {
-                        const currentPct = (asset.value / summary.totalValue) * 100;
+                        const currentPct = (asset.value / convertedTotalValue) * 100;
                         const target = asset.targetAllocation || 0;
                         const deviation = target > 0 ? currentPct - target : 0;
                         const isSignificant = Math.abs(deviation) >= 5;

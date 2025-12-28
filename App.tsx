@@ -276,7 +276,7 @@ const App: React.FC = () => {
           } : a)
         }));
         
-        const historyData = await fetchAssetHistory(ticker, result.price, result.symbol);
+        const historyData = await fetchAssetHistory(ticker, result.price, result.symbol, result.assetType);
         if (historyData) {
           updateActivePortfolio(portfolio => ({
             ...portfolio,

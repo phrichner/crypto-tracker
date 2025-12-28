@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { PortfolioSummary, Asset } from '../types';
-import { fetchExchangeRates } from '../services/currencyService';
+import { fetchExchangeRates, convertCurrencySync } from '../services/currencyService';
 import { TrendingUp, PieChart, Clock, RefreshCw, TrendingDown, AlertTriangle } from 'lucide-react';
 
 interface SummaryProps {
@@ -33,30 +33,27 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
   const [showAllAssets, setShowAllAssets] = useState(false);
   const [displayCurrency, setDisplayCurrency] = useState<'USD' | 'CHF' | 'EUR'>('USD');
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({});
+  const [ratesLoaded, setRatesLoaded] = useState(false);
 
   // Load exchange rates on mount
   useEffect(() => {
     const loadRates = async () => {
       const rates = await fetchExchangeRates();
       setExchangeRates(rates);
+      setRatesLoaded(true); // Mark rates as loaded
       console.log('💱 Summary: Exchange rates loaded:', rates);
     };
     loadRates();
   }, []);
 
   // Convert any currency to display currency using dynamic rates
+  // This is a wrapper around convertCurrencySync that uses the loaded exchange rates
   const convertToDisplayCurrency = (value: number, fromCurrency: string, toCurrency: string = 'USD'): number => {
-    if (fromCurrency === toCurrency) return value;
-    if (Object.keys(exchangeRates).length === 0) {
-      console.warn('⚠️ Exchange rates not loaded yet, using 1:1');
-      return value;
+    if (!ratesLoaded) {
+      console.error('⚠️ convertToDisplayCurrency called before rates loaded');
+      return 0; // Return 0 to prevent incorrect chart data
     }
-    
-    // Convert to USD first
-    const valueInUSD = fromCurrency === 'USD' ? value : value / exchangeRates[fromCurrency];
-    
-    // Then convert to target currency
-    return toCurrency === 'USD' ? valueInUSD : valueInUSD * exchangeRates[toCurrency];
+    return convertCurrencySync(value, fromCurrency, toCurrency, exchangeRates);
   };
 
   // P4 CHANGE: Convert total value to selected currency
@@ -86,6 +83,17 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
   // --- Stacked Area Chart Logic ---
   const { Chart, xAxisLabels, yAxisLabels, chartData, maxY } = useMemo(() => {
+    // Early return if exchange rates not loaded yet
+    if (!ratesLoaded) {
+      return { 
+        Chart: null, 
+        xAxisLabels: [], 
+        yAxisLabels: [], 
+        chartData: [], 
+        maxY: 0 
+      };
+    }
+
     const now = Date.now();
     let minTime = now;
     let maxTime = now;
@@ -318,7 +326,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
     return { Chart: FinalChart, xAxisLabels: xLabels, yAxisLabels: yLabels, chartData: generatedData, maxY: computedMaxY };
 
-  }, [assets, timeRange, customStart, customEnd, displayCurrency]);
+  }, [assets, timeRange, customStart, customEnd, displayCurrency, ratesLoaded, exchangeRates]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     if (!chartContainerRef.current || chartData.length === 0) return;
@@ -564,11 +572,20 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                 onMouseLeave={handleMouseLeave}
                 onTouchMove={handleMouseMove}
              >
-                <div className="absolute inset-0 p-2 pointer-events-none">
-                    {Chart}
-                </div>
+                {!ratesLoaded ? (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="text-slate-500 text-sm flex items-center gap-2">
+                      <RefreshCw className="animate-spin" size={16} />
+                      Loading exchange rates...
+                    </div>
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 p-2 pointer-events-none">
+                      {Chart}
+                  </div>
+                )}
 
-                {hoverData && (
+                {hoverData && ratesLoaded && (
                    <>
                       <div className="absolute top-0 bottom-0 w-px bg-white/40 pointer-events-none z-20" style={{ left: hoverData.x }} />
                       <div 

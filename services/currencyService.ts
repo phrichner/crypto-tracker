@@ -1,26 +1,31 @@
 // Currency Exchange Rate Service
 // Uses exchangerate-api.com free tier (1500 requests/month)
 
-import { Currency } from '../types';
-
 interface ExchangeRatesResponse {
   result: string;
+  documentation: string;
+  terms_of_use: string;
+  time_last_update_unix: number;
+  time_last_update_utc: string;
+  time_next_update_unix: number;
+  time_next_update_utc: string;
   base_code: string;
-  rates: Record<string, number>;
+  conversion_rates: Record<string, number>;
 }
 
 const EXCHANGE_RATE_CACHE_KEY = 'fx_rates_cache';
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
-// Fallback rates (updated manually as backup)
+// Fallback rates (updated manually as backup - last updated Dec 2024)
+// These are only used if the API fails completely
 const FALLBACK_RATES: Record<string, number> = {
   'USD': 1.00,
-  'CHF': 0.92,
-  'EUR': 0.93,
-  'GBP': 0.79,
-  'JPY': 110.0,
-  'CAD': 1.25,
-  'AUD': 1.35,
+  'CHF': 0.87,   // Updated from 0.92
+  'EUR': 0.93,   // Correct
+  'GBP': 0.78,   // Updated from 0.79
+  'JPY': 149.0,  // Updated from 110.0
+  'CAD': 1.43,   // Updated from 1.25
+  'AUD': 1.59,   // Updated from 1.35
 };
 
 interface CachedRates {
@@ -54,8 +59,8 @@ export const fetchExchangeRates = async (): Promise<Record<string, number>> => {
     
     const data: ExchangeRatesResponse = await response.json();
     
-    if (data.rates) {
-      const rates = data.rates;
+    if (data.result === 'success' || data.conversion_rates) {
+      const rates = data.conversion_rates;
       
       // Cache the fresh rates
       const cacheData: CachedRates = {
@@ -79,8 +84,8 @@ export const fetchExchangeRates = async (): Promise<Record<string, number>> => {
 // Convert amount from one currency to another
 export const convertCurrency = async (
   amount: number,
-  fromCurrency: Currency,
-  toCurrency: Currency = 'USD'
+  fromCurrency: string,
+  toCurrency: string = 'USD'
 ): Promise<number> => {
   if (fromCurrency === toCurrency) return amount;
   
@@ -93,8 +98,31 @@ export const convertCurrency = async (
   return amountInUSD * rates[toCurrency];
 };
 
+// SYNCHRONOUS conversion using pre-loaded rates (for use in useMemo/render loops)
+// This avoids async/await issues in React rendering
+export const convertCurrencySync = (
+  amount: number,
+  fromCurrency: string,
+  toCurrency: string,
+  rates: Record<string, number>
+): number => {
+  if (fromCurrency === toCurrency) return amount;
+  
+  // Safety check: ensure we have the required rates
+  if (!rates[fromCurrency] || !rates[toCurrency]) {
+    console.error('❌ Missing exchange rate for', fromCurrency, 'or', toCurrency);
+    return amount; // Fallback to original value to prevent NaN
+  }
+  
+  // Convert to USD first (all rates are relative to USD)
+  const amountInUSD = amount / rates[fromCurrency];
+  
+  // Then convert to target currency
+  return amountInUSD * rates[toCurrency];
+};
+
 // Get single exchange rate
-export const getExchangeRate = async (fromCurrency: Currency, toCurrency: Currency = 'USD'): Promise<number> => {
+export const getExchangeRate = async (fromCurrency: string, toCurrency: string = 'USD'): Promise<number> => {
   if (fromCurrency === toCurrency) return 1;
   
   const rates = await fetchExchangeRates();
@@ -104,13 +132,13 @@ export const getExchangeRate = async (fromCurrency: Currency, toCurrency: Curren
 
 // Supported currencies list
 export const SUPPORTED_CURRENCIES = [
-  { code: 'USD' as Currency, name: 'US Dollar', symbol: '$', flag: '🇺🇸' },
-  { code: 'CHF' as Currency, name: 'Swiss Franc', symbol: 'CHF', flag: '🇨🇭' },
-  { code: 'EUR' as Currency, name: 'Euro', symbol: '€', flag: '🇪🇺' },
-  { code: 'GBP' as Currency, name: 'British Pound', symbol: '£', flag: '🇬🇧' },
-  { code: 'JPY' as Currency, name: 'Japanese Yen', symbol: '¥', flag: '🇯🇵' },
-  { code: 'CAD' as Currency, name: 'Canadian Dollar', symbol: 'CA$', flag: '🇨🇦' },
-  { code: 'AUD' as Currency, name: 'Australian Dollar', symbol: 'A$', flag: '🇦🇺' },
+  { code: 'USD', name: 'US Dollar', symbol: '$', flag: '🇺🇸' },
+  { code: 'CHF', name: 'Swiss Franc', symbol: 'CHF', flag: '🇨🇭' },
+  { code: 'EUR', name: 'Euro', symbol: '€', flag: '🇪🇺' },
+  { code: 'GBP', name: 'British Pound', symbol: '£', flag: '🇬🇧' },
+  { code: 'JPY', name: 'Japanese Yen', symbol: '¥', flag: '🇯🇵' },
+  { code: 'CAD', name: 'Canadian Dollar', symbol: 'CA$', flag: '🇨🇦' },
+  { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', flag: '🇦🇺' },
 ] as const;
 
 // Clear cache manually if needed

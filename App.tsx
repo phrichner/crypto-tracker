@@ -209,7 +209,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddAsset = async (ticker: string, quantity: number, pricePerCoin: number, date: string, currency: Currency = 'USD') => {
+  const handleAddAsset = async (ticker: string, quantity: number, pricePerCoin: number, date: string, currency: Currency = 'USD', tag?: string) => {
     const totalCost = quantity * pricePerCoin;
     const newTx: Transaction = { 
       id: Math.random().toString(36).substr(2, 9), 
@@ -218,7 +218,7 @@ const App: React.FC = () => {
       pricePerCoin, 
       date, 
       totalCost,
-      tag: 'DCA', // Default tag
+      tag: tag || 'DCA', // Use provided tag or default to DCA
       createdAt: new Date().toISOString()
     };
     const existingAsset = assets.find(a => a.ticker === ticker);

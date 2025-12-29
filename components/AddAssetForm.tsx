@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { Plus, Loader2, Calendar, DollarSign } from 'lucide-react';
+import { Plus, Loader2, Calendar, DollarSign, Tag } from 'lucide-react';
 import { Currency } from '../types';
 import { SUPPORTED_CURRENCIES } from '../services/currencyService';
 
 interface AddAssetFormProps {
-  onAdd: (ticker: string, quantity: number, pricePerCoin: number, date: string, currency: Currency) => Promise<void>;
+  onAdd: (ticker: string, quantity: number, pricePerCoin: number, date: string, currency: Currency, tag?: string) => Promise<void>;
   isGlobalLoading: boolean;
 }
+
+const PRESET_TAGS = ['DCA', 'FOMO', 'Strategic', 'Rebalance', 'Emergency', 'Profit-Taking', 'Research'];
 
 export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoading }) => {
   const [ticker, setTicker] = useState('');
@@ -14,6 +16,8 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
   const [totalPaid, setTotalPaid] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [currency, setCurrency] = useState<Currency>('USD');
+  const [tag, setTag] = useState('DCA');
+  const [customTag, setCustomTag] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -26,19 +30,24 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
     // Calculate price per coin derived from total paid
     const calculatedPricePerCoin = qtyNum > 0 ? totalPaidNum / qtyNum : 0;
 
+    // Use custom tag if "Custom" is selected and custom tag is filled
+    const finalTag = tag === 'Custom' && customTag.trim() ? customTag.trim() : tag;
+
     setIsSubmitting(true);
     await onAdd(
       ticker, 
       qtyNum, 
       calculatedPricePerCoin,
       date,
-      currency
+      currency,
+      finalTag
     );
     
-    // Reset form but keep date and currency
+    // Reset form but keep date, currency, and tag
     setTicker('');
     setQuantity('');
     setTotalPaid('');
+    setCustomTag('');
     setIsSubmitting(false);
   };
 
@@ -49,7 +58,7 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
         Add Transaction
       </h2>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
           <div className="flex-1 w-full">
             <label htmlFor="ticker" className="block text-xs font-medium text-slate-400 mb-1">
               Ticker Symbol
@@ -112,14 +121,40 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
               id="currency"
               value={currency}
               onChange={(e) => setCurrency(e.target.value as Currency)}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-all appearance-none cursor-pointer"
             >
               {SUPPORTED_CURRENCIES.map(curr => (
                 <option key={curr.code} value={curr.code}>
-                  {curr.flag} {curr.code} - {curr.name}
+                  {curr.flag} {curr.code}
                 </option>
               ))}
             </select>
+          </div>
+          <div className="flex-1 w-full">
+            <label htmlFor="tag" className="block text-xs font-medium text-slate-400 mb-1">
+              Tag
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-2.5 text-slate-500 pointer-events-none">
+                <Tag size={16} />
+              </span>
+              <select
+                id="tag"
+                value={tag}
+                onChange={(e) => setTag(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-9 pr-4 py-2.5 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-all cursor-pointer appearance-none"
+              >
+                {PRESET_TAGS.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+                <option value="Custom">Custom...</option>
+              </select>
+              <div className="absolute right-3 top-3 pointer-events-none">
+                <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
           </div>
           <div className="flex-1 w-full">
             <label htmlFor="date" className="block text-xs font-medium text-slate-400 mb-1">
@@ -140,6 +175,23 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
             </div>
           </div>
         </div>
+        
+        {/* Custom tag input - shows only when "Custom" is selected */}
+        {tag === 'Custom' && (
+          <div className="w-full md:w-1/3">
+            <label htmlFor="customTag" className="block text-xs font-medium text-slate-400 mb-1">
+              Custom Tag Name
+            </label>
+            <input
+              id="customTag"
+              type="text"
+              value={customTag}
+              onChange={(e) => setCustomTag(e.target.value)}
+              placeholder="Enter custom tag..."
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2.5 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder-slate-600"
+            />
+          </div>
+        )}
         
         <button
           type="submit"

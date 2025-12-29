@@ -259,8 +259,14 @@ const checkIfAllDatesAreCached = (
 };
 
 /**
- * Convert currency using historical rates (synchronous, requires pre-loaded historical data)
+ * 🔧 FIXED: Convert currency using historical rates with intelligent inverse rate calculation
  * Used for chart calculations with date-specific exchange rates
+ * 
+ * Handles 4 conversion cases:
+ * 1. Direct rates available for both currencies
+ * 2. USD → Target (direct multiplication)
+ * 3. Source → USD (inverse rate calculation)
+ * 4. Cross-currency via USD (combine inverse + direct)
  */
 export const convertCurrencySyncHistorical = (
   amount: number,
@@ -271,22 +277,69 @@ export const convertCurrencySyncHistorical = (
   fallbackCurrentRates: Record<string, number>
 ): number => {
   if (fromCurrency === toCurrency) {
+    console.log(`💱 [${date.toISOString().split('T')[0]}] ${fromCurrency} → ${toCurrency}: Same currency, returning ${amount}`);
     return amount;
   }
   
   const dateStr = date.toISOString().split('T')[0];
   const ratesForDate = historicalRates[dateStr];
   
-  if (ratesForDate && ratesForDate[fromCurrency] !== undefined && ratesForDate[toCurrency] !== undefined) {
-    // Convert: from -> USD -> to
-    const fromRate = ratesForDate[fromCurrency];
-    const toRate = ratesForDate[toCurrency];
-    
-    const amountInUSD = amount / fromRate;
-    return amountInUSD * toRate;
+  if (!ratesForDate) {
+    console.warn(`⚠️ No historical rates for ${dateStr}, using current rates as fallback`);
+    return convertCurrencySync(amount, fromCurrency, toCurrency, fallbackCurrentRates);
   }
   
-  // Fallback to current rates if historical rate not available
-  console.warn(`⚠️ No historical rate for ${dateStr}, using current rate`);
+  console.log(`💱 [${dateStr}] Converting ${amount} ${fromCurrency} → ${toCurrency}`);
+  console.log(`   Available rates:`, Object.keys(ratesForDate).join(', '));
+  
+  // Case 1: Both currencies available directly
+  if (ratesForDate[fromCurrency] !== undefined && ratesForDate[toCurrency] !== undefined) {
+    const fromRate = ratesForDate[fromCurrency];
+    const toRate = ratesForDate[toCurrency];
+    const amountInUSD = amount / fromRate;
+    const result = amountInUSD * toRate;
+    console.log(`   ✅ Case 1 (Direct): ${amount} / ${fromRate} * ${toRate} = ${result}`);
+    return result;
+  }
+  
+  // Case 2: From USD to target (e.g., USD → CHF)
+  if (fromCurrency === 'USD' && ratesForDate[toCurrency] !== undefined) {
+    const result = amount * ratesForDate[toCurrency];
+    console.log(`   ✅ Case 2 (USD→Target): ${amount} * ${ratesForDate[toCurrency]} = ${result}`);
+    return result;
+  }
+  
+  // Case 3: From source to USD (e.g., CHF → USD) - INVERSE RATE
+  if (toCurrency === 'USD' && ratesForDate[fromCurrency] !== undefined) {
+    const inverseRate = 1 / ratesForDate[fromCurrency];
+    const result = amount * inverseRate;
+    console.log(`   ✅ Case 3 (Source→USD inverse): ${amount} * (1/${ratesForDate[fromCurrency]}) = ${amount} * ${inverseRate} = ${result}`);
+    return result;
+  }
+  
+  // Case 4: Cross-currency via USD (e.g., CHF → EUR)
+  // Use inverse for from-currency if needed
+  let fromToUsdRate: number | undefined;
+  let usdToToRate: number | undefined;
+  
+  if (ratesForDate[fromCurrency] !== undefined) {
+    fromToUsdRate = 1 / ratesForDate[fromCurrency]; // Inverse: CHF→USD
+    console.log(`   📐 From→USD inverse rate: 1/${ratesForDate[fromCurrency]} = ${fromToUsdRate}`);
+  }
+  
+  if (ratesForDate[toCurrency] !== undefined) {
+    usdToToRate = ratesForDate[toCurrency]; // Direct: USD→EUR
+    console.log(`   📐 USD→To rate: ${usdToToRate}`);
+  }
+  
+  if (fromToUsdRate !== undefined && usdToToRate !== undefined) {
+    const result = amount * fromToUsdRate * usdToToRate;
+    console.log(`   ✅ Case 4 (Cross-currency): ${amount} * ${fromToUsdRate} * ${usdToToRate} = ${result}`);
+    return result;
+  }
+  
+  // Fallback to current rates if no historical path found
+  console.warn(`⚠️ [${dateStr}] No valid conversion path for ${fromCurrency}→${toCurrency}, using current rates`);
+  console.warn(`   Missing rates: ${fromCurrency}=${ratesForDate[fromCurrency]}, ${toCurrency}=${ratesForDate[toCurrency]}`);
   return convertCurrencySync(amount, fromCurrency, toCurrency, fallbackCurrentRates);
 };

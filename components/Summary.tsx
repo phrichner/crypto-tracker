@@ -159,14 +159,12 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
       convertedTotalValue: totalValue,
       convertedCostBasis: totalCostBasis,
       convertedPnL: pnl,
-      // 💰 CHANGED: Added minimumFractionDigits: 2 and maximumFractionDigits: 2
       formattedTotal: new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: displayCurrency,
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       }).format(totalValue),
-      // 💰 CHANGED: Added minimumFractionDigits: 2 and maximumFractionDigits: 2
       formattedPnL: new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: displayCurrency,
@@ -482,7 +480,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
     const yLabels = [0, 0.5, 1].map(p => {
        const val = computedMaxY * (1 - p);
-       // 📊 CHANGED: Added minimumFractionDigits: 2 for Y-axis labels
        return {
           y: p * 100,
           text: new Intl.NumberFormat('en-US', { 
@@ -774,7 +771,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                          
                          <div className="grid grid-cols-2 gap-x-4 mb-3 border-b border-slate-700/50 pb-2">
                             <div>
-                                {/* 📊 CHANGED: Added minimumFractionDigits: 2 and maximumFractionDigits: 2 */}
                                 <span className="text-[10px] text-slate-400 uppercase">Value ({displayCurrency})</span>
                                 <div className="text-sm font-bold text-white">
                                     {new Intl.NumberFormat('en-US', { 
@@ -825,7 +821,6 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                                             </span>
                                         </div>
                                         <div className="text-right text-slate-400 col-span-1">
-                                            {/* P4 CHANGE: Values already in display currency from chart calculation */}
                                             {new Intl.NumberFormat('en-US', { 
                                               style: 'currency', 
                                               currency: displayCurrency, 
@@ -855,7 +850,18 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                     ))}
                 </div>
              </div>
-             <div className="h-6"></div>
+             
+             {/* 📊 CHART LEGEND - ONLY CHANGE */}
+             <div className="flex items-center justify-center gap-6 mt-6 text-xs text-slate-400">
+               <div className="flex items-center gap-2">
+                 <div className="w-8 h-0.5 border-t-2 border-dashed border-white opacity-90"></div>
+                 <span>Cost Basis (Total Invested)</span>
+               </div>
+               <div className="flex items-center gap-2">
+                 <div className="w-8 h-3 bg-gradient-to-r from-indigo-500 to-emerald-500 rounded-sm opacity-70"></div>
+                 <span>Market Value (Current Holdings)</span>
+               </div>
+             </div>
           </div>
       </div>
 

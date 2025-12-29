@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { PortfolioSummary, Asset } from '../types';
-import { fetchExchangeRates, convertCurrencySync } from '../services/currencyService';
+import { fetchExchangeRates, convertCurrencySync, fetchHistoricalExchangeRates, convertCurrencySyncHistorical } from '../services/currencyService';
 import { TrendingUp, PieChart, Clock, RefreshCw, TrendingDown, AlertTriangle } from 'lucide-react';
 
 interface SummaryProps {
@@ -56,17 +56,49 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
   const [displayCurrency, setDisplayCurrency] = useState<'USD' | 'CHF' | 'EUR'>('USD');
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({});
   const [ratesLoaded, setRatesLoaded] = useState(false);
+  const [historicalRates, setHistoricalRates] = useState<Record<string, Record<string, number>>>({});
+  const [historicalRatesLoaded, setHistoricalRatesLoaded] = useState(false);
 
   // Load exchange rates on mount
   useEffect(() => {
     const loadRates = async () => {
       const rates = await fetchExchangeRates();
       setExchangeRates(rates);
-      setRatesLoaded(true); // Mark rates as loaded
+      setRatesLoaded(true);
       console.log('💱 Summary: Exchange rates loaded:', rates);
     };
     loadRates();
   }, []);
+
+  // Load historical exchange rates when time range or assets change
+  useEffect(() => {
+    const loadHistoricalRates = async () => {
+      if (assets.length === 0) {
+        setHistoricalRatesLoaded(true);
+        return;
+      }
+
+      // Find the earliest transaction date
+      let earliestDate = new Date();
+      assets.forEach(asset => {
+        asset.transactions.forEach(tx => {
+          const txDate = new Date(tx.date);
+          if (txDate < earliestDate) {
+            earliestDate = txDate;
+          }
+        });
+      });
+
+      // Fetch historical rates from earliest transaction to today
+      console.log(`💱 Loading historical FX rates from ${earliestDate.toISOString().split('T')[0]} to today...`);
+      const historical = await fetchHistoricalExchangeRates(earliestDate, new Date());
+      setHistoricalRates(historical);
+      setHistoricalRatesLoaded(true);
+      console.log(`✅ Historical FX rates loaded: ${Object.keys(historical).length} days`);
+    };
+
+    loadHistoricalRates();
+  }, [assets, timeRange]); // Re-load when assets or timeRange changes
 
   // 🔍 DEBUG: Log assets to see what currency field contains
   useEffect(() => {
@@ -175,7 +207,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
     };
 
     // Early return if exchange rates not loaded yet
-    if (!ratesLoaded) {
+    if (!ratesLoaded || !historicalRatesLoaded) {
       return { 
         Chart: null, 
         xAxisLabels: [], 
@@ -254,8 +286,16 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
             // Detect currency from ticker/asset
             const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
             
-            // Convert cost to display currency
-            const costInDisplay = convertToDisplayCurrency(costAtTime, assetCurrency);
+            // Convert cost to display currency using HISTORICAL rate for date t
+            const costDate = new Date(t);
+            const costInDisplay = convertCurrencySyncHistorical(
+              costAtTime,
+              assetCurrency,
+              displayCurrency,
+              costDate,
+              historicalRates,
+              exchangeRates
+            );
             costStack[asset.id] = costInDisplay;
 
             // B. Find Price at time t - SIMPLIFIED LOGIC
@@ -310,8 +350,16 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
             }
 
             const valInNativeCurrency = qtyAtTime * estimatedPrice;
-            // Convert to display currency
-            const valInDisplay = convertToDisplayCurrency(valInNativeCurrency, assetCurrency);
+            // Convert to display currency using HISTORICAL rate for date t
+            const valDate = new Date(t);
+            const valInDisplay = convertCurrencySyncHistorical(
+              valInNativeCurrency,
+              assetCurrency,
+              displayCurrency,
+              valDate,
+              historicalRates,
+              exchangeRates
+            );
             
             stack[asset.id] = valInDisplay;
             totalVal += valInDisplay;
@@ -420,7 +468,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
 
     return { Chart: FinalChart, xAxisLabels: xLabels, yAxisLabels: yLabels, chartData: generatedData, maxY: computedMaxY };
 
-  }, [assets, timeRange, customStart, customEnd, displayCurrency, ratesLoaded, exchangeRates]);
+  }, [assets, timeRange, customStart, customEnd, displayCurrency, ratesLoaded, historicalRatesLoaded, exchangeRates, historicalRates]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     if (!chartContainerRef.current || chartData.length === 0) return;
@@ -667,7 +715,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                 onMouseLeave={handleMouseLeave}
                 onTouchMove={handleMouseMove}
              >
-                {!ratesLoaded ? (
+                {!ratesLoaded || !historicalRatesLoaded ? (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="text-slate-500 text-sm flex items-center gap-2">
                       <RefreshCw className="animate-spin" size={16} />
@@ -680,7 +728,7 @@ export const Summary: React.FC<SummaryProps> = ({ summary, assets, onRefreshAll,
                   </div>
                 )}
 
-                {hoverData && ratesLoaded && (
+                {hoverData && ratesLoaded && historicalRatesLoaded && (
                    <>
                       <div className="absolute top-0 bottom-0 w-px bg-white/40 pointer-events-none z-20" style={{ left: hoverData.x }} />
                       <div 

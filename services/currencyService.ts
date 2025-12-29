@@ -144,3 +144,149 @@ export const clearExchangeRateCache = () => {
   localStorage.removeItem(EXCHANGE_RATE_CACHE_KEY);
   console.log('🗑️ Exchange rate cache cleared');
 };
+
+// ============================================
+// HISTORICAL EXCHANGE RATES (for chart fix)
+// ============================================
+
+const HISTORICAL_RATES_CACHE_KEY = 'fx_rates_historical';
+
+/**
+ * Fetch historical exchange rates for a date range
+ * Uses frankfurter.app (free, unlimited, supports time-series)
+ * Returns: Map of date (YYYY-MM-DD) -> rates
+ */
+export const fetchHistoricalExchangeRates = async (
+  fromDate: Date,
+  toDate: Date = new Date()
+): Promise<Record<string, Record<string, number>>> => {
+  
+  const cacheKey = HISTORICAL_RATES_CACHE_KEY;
+  const cached = localStorage.getItem(cacheKey);
+  let cachedData: Record<string, Record<string, number>> = {};
+  
+  if (cached) {
+    try {
+      cachedData = JSON.parse(cached);
+      console.log(`📦 Loaded ${Object.keys(cachedData).length} cached historical FX rate days`);
+    } catch (e) {
+      console.warn('⚠️ Failed to parse cached historical FX rates');
+    }
+  }
+  
+  const fromDateStr = fromDate.toISOString().split('T')[0];
+  const toDateStr = toDate.toISOString().split('T')[0];
+  
+  // Check if we already have all dates in cache
+  const hasAllDates = checkIfAllDatesAreCached(fromDateStr, toDateStr, cachedData);
+  
+  if (hasAllDates) {
+    console.log(`✅ All historical FX rates for ${fromDateStr} to ${toDateStr} found in cache`);
+    return cachedData;
+  }
+  
+  console.log(`💱 Fetching historical FX rates for ${fromDateStr} to ${toDateStr}...`);
+  
+  try {
+    // Frankfurter.app supports time-series endpoint
+    const url = `https://api.frankfurter.app/${fromDateStr}..${toDateStr}?from=USD`;
+    console.log(`📡 Fetching from: ${url}`);
+    
+    const res = await fetch(url);
+    
+    if (!res.ok) {
+      throw new Error(`frankfurter.app returned status ${res.status}`);
+    }
+    
+    const data = await res.json();
+    console.log(`✅ Received historical data from frankfurter.app:`, Object.keys(data.rates || {}).length, 'days');
+    
+    // Convert to our format: { "2025-12-01": { USD: 1.0, CHF: 0.88, ... }, ... }
+    const historicalRates: Record<string, Record<string, number>> = {};
+    
+    for (const [dateStr, rates] of Object.entries(data.rates || {})) {
+      const ratesObj = rates as Record<string, number>;
+      
+      historicalRates[dateStr] = {
+        USD: 1.0, // USD to USD is always 1
+        ...ratesObj
+      };
+    }
+    
+    // Merge with cache
+    const merged = { ...cachedData, ...historicalRates };
+    
+    // Save to cache
+    localStorage.setItem(cacheKey, JSON.stringify(merged));
+    console.log(`💾 Saved ${Object.keys(merged).length} total historical FX rate days to cache`);
+    
+    return merged;
+    
+  } catch (error) {
+    console.error('❌ Failed to fetch historical FX rates:', error);
+    
+    // Return cached data if available
+    if (Object.keys(cachedData).length > 0) {
+      console.log('📦 Falling back to cached historical FX rates');
+      return cachedData;
+    }
+    
+    // Ultimate fallback: return empty (will use current rates as fallback)
+    return {};
+  }
+};
+
+/**
+ * Check if all dates in range are cached
+ */
+const checkIfAllDatesAreCached = (
+  fromDateStr: string,
+  toDateStr: string,
+  cache: Record<string, Record<string, number>>
+): boolean => {
+  const from = new Date(fromDateStr);
+  const to = new Date(toDateStr);
+  
+  // Check every day in range
+  for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().split('T')[0];
+    if (!cache[dateStr]) {
+      return false; // Missing this date
+    }
+  }
+  
+  return true;
+};
+
+/**
+ * Convert currency using historical rates (synchronous, requires pre-loaded historical data)
+ * Used for chart calculations with date-specific exchange rates
+ */
+export const convertCurrencySyncHistorical = (
+  amount: number,
+  fromCurrency: string,
+  toCurrency: string,
+  date: Date,
+  historicalRates: Record<string, Record<string, number>>,
+  fallbackCurrentRates: Record<string, number>
+): number => {
+  if (fromCurrency === toCurrency) {
+    return amount;
+  }
+  
+  const dateStr = date.toISOString().split('T')[0];
+  const ratesForDate = historicalRates[dateStr];
+  
+  if (ratesForDate && ratesForDate[fromCurrency] !== undefined && ratesForDate[toCurrency] !== undefined) {
+    // Convert: from -> USD -> to
+    const fromRate = ratesForDate[fromCurrency];
+    const toRate = ratesForDate[toCurrency];
+    
+    const amountInUSD = amount / fromRate;
+    return amountInUSD * toRate;
+  }
+  
+  // Fallback to current rates if historical rate not available
+  console.warn(`⚠️ No historical rate for ${dateStr}, using current rate`);
+  return convertCurrencySync(amount, fromCurrency, toCurrency, fallbackCurrentRates);
+};

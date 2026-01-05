@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Asset, TransactionTag, Currency } from '../types';
+import { convertCurrencySync } from '../services/currencyService';
 import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle, Edit2, Save, X } from 'lucide-react';
 
 interface AssetCardProps {
@@ -40,33 +41,30 @@ const calculateFxAdjustedPnL = (
   currentPrice: number
 ): { pnl: number; costBasis: number; currentValue: number } => {
   const currentValue = tx.quantity * currentPrice;
-  
+
   // If transaction has historical FX rates, use them for accurate conversion
   if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
-    const purchaseCurrency = tx.purchaseCurrency;
-    
-    // Get historical rate for the asset's currency at purchase time
-    const historicalRate = tx.exchangeRateAtPurchase[assetCurrency];
-    
-    if (historicalRate) {
-      // Convert historical cost from purchase currency to asset currency using historical rate
-      // Example: Bought BTC for $10k when USD->CHF was 0.88
-      // Cost in CHF = $10k * 0.88 = CHF 8,800
-      const costBasisInAssetCurrency = tx.totalCost * historicalRate;
-      const pnl = currentValue - costBasisInAssetCurrency;
-      
-      return {
-        pnl,
-        costBasis: costBasisInAssetCurrency,
-        currentValue
-      };
-    }
+    // Convert cost from purchase currency to asset currency using historical rates
+    const costBasisInAssetCurrency = convertCurrencySync(
+      tx.totalCost,
+      tx.purchaseCurrency,
+      assetCurrency,
+      tx.exchangeRateAtPurchase
+    );
+
+    const pnl = currentValue - costBasisInAssetCurrency;
+
+    return {
+      pnl,
+      costBasis: costBasisInAssetCurrency,
+      currentValue
+    };
   }
-  
+
   // Fallback: No FX adjustment (old transactions or missing data)
   const costBasis = tx.totalCost;
   const pnl = currentValue - costBasis;
-  
+
   return {
     pnl,
     costBasis,

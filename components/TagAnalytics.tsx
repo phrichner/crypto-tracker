@@ -67,31 +67,33 @@ export const TagAnalytics: React.FC<TagAnalyticsProps> = ({ assets, displayCurre
       // Iterate through all transactions in each asset
       for (const tx of asset.transactions) {
         const tag = tx.tag || 'Untagged';
-        
+
         // P1.1B CHANGE: Calculate FX-adjusted cost basis
-        // Start with the transaction's total cost
-        let investedFromTx = tx.totalCost;
-        
-        // If transaction has historical FX rates, use them for accurate cost conversion
-        if (tx.exchangeRateAtPurchase && tx.purchaseCurrency && tx.exchangeRateAtPurchase[assetCurrency]) {
-          // Convert cost from purchase currency to asset currency using historical rate
-          // Example: Bought for $10k when USD->CHF was 0.88 = CHF 8,800
-          investedFromTx = tx.totalCost * tx.exchangeRateAtPurchase[assetCurrency];
+        // Convert cost from purchase currency directly to display currency using HISTORICAL rates
+        let investedInDisplay: number;
+
+        if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+          // Use historical rates from the transaction's purchase date
+          investedInDisplay = convertCurrencySync(
+            tx.totalCost,
+            tx.purchaseCurrency,
+            displayCurrency,
+            tx.exchangeRateAtPurchase
+          );
+        } else {
+          // Fallback: convert using current rates (backward compatible)
+          investedInDisplay = convertCurrencySync(
+            tx.totalCost,
+            assetCurrency,
+            displayCurrency,
+            exchangeRates
+          );
         }
-        
-        // Calculate current value from this transaction (always in asset currency)
+
+        // Calculate current value from this transaction and convert using current rates
         const currentValueFromTx = asset.currentPrice * tx.quantity;
-        
-        // Convert both to display currency using current rates
         const currentValueInDisplay = convertCurrencySync(
           currentValueFromTx,
-          assetCurrency,
-          displayCurrency,
-          exchangeRates
-        );
-        
-        const investedInDisplay = convertCurrencySync(
-          investedFromTx,
           assetCurrency,
           displayCurrency,
           exchangeRates

@@ -147,32 +147,33 @@ export const Summary: React.FC<SummaryProps> = ({
 
     for (const asset of assets) {
       const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
-      
-      // Current value (simple)
+
+      // Current value (simple) - convert using current rates
       const assetValue = asset.quantity * asset.currentPrice;
-      
-      // P1.1B CHANGE: FX-adjusted cost basis
-      // Sum up FX-adjusted costs from each transaction
-      let assetFxAdjustedCost = 0;
-      
+      const valueInDisplay = convertToDisplayCurrency(assetValue, assetCurrency, displayCurrency);
+
+      // P1.1B CHANGE: Cost basis - convert each transaction using its HISTORICAL rates
+      let costBasisInDisplay = 0;
+
       for (const tx of asset.transactions) {
-        // If transaction has historical FX rates, use them
-        if (tx.exchangeRateAtPurchase && tx.purchaseCurrency && tx.exchangeRateAtPurchase[assetCurrency]) {
-          // Convert cost from purchase currency to asset currency using historical rate
-          const costInAssetCurrency = tx.totalCost * tx.exchangeRateAtPurchase[assetCurrency];
-          assetFxAdjustedCost += costInAssetCurrency;
+        if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+          // Convert cost from purchase currency directly to display currency using historical rates
+          const costInDisplay = convertCurrencySync(
+            tx.totalCost,
+            tx.purchaseCurrency,
+            displayCurrency,
+            tx.exchangeRateAtPurchase
+          );
+          costBasisInDisplay += costInDisplay;
         } else {
-          // Fallback: use transaction cost as-is (backward compatible)
-          assetFxAdjustedCost += tx.totalCost;
+          // Fallback: convert using current rates (backward compatible)
+          const costInDisplay = convertToDisplayCurrency(tx.totalCost, assetCurrency, displayCurrency);
+          costBasisInDisplay += costInDisplay;
         }
       }
 
-      // Convert both to display currency
-      const valueInDisplay = convertToDisplayCurrency(assetValue, assetCurrency, displayCurrency);
-      const costInDisplay = convertToDisplayCurrency(assetFxAdjustedCost, assetCurrency, displayCurrency);
-
       totalValue += valueInDisplay;
-      totalCostBasis += costInDisplay;
+      totalCostBasis += costBasisInDisplay;
     }
 
     const pnl = totalValue - totalCostBasis;
@@ -291,21 +292,33 @@ export const Summary: React.FC<SummaryProps> = ({
         assets.forEach(asset => {
             // A. Calculate Cumulative Quantity and FX-Adjusted Cost at time t
             let qtyAtTime = 0;
-            let fxAdjustedCostAtTime = 0;
-            
+            let costInDisplayAtTime = 0;
+
             asset.transactions.forEach(tx => {
                const txTime = new Date(tx.date).getTime();
                if (txTime <= t) {
                    qtyAtTime += tx.quantity;
-                   
-                   // P1.1B CHANGE: Use FX-adjusted cost if available
-                   const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
-                   if (tx.exchangeRateAtPurchase && tx.purchaseCurrency && tx.exchangeRateAtPurchase[assetCurrency]) {
-                     // Convert from purchase currency to asset currency using historical rate
-                     fxAdjustedCostAtTime += tx.totalCost * tx.exchangeRateAtPurchase[assetCurrency];
+
+                   // P1.1B CHANGE: Convert each transaction's cost directly to display currency
+                   // using its HISTORICAL rate from purchase date
+                   if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+                     const costInDisplay = convertCurrencySync(
+                       tx.totalCost,
+                       tx.purchaseCurrency,
+                       displayCurrency,
+                       tx.exchangeRateAtPurchase
+                     );
+                     costInDisplayAtTime += costInDisplay;
                    } else {
-                     // Fallback: use transaction cost as-is
-                     fxAdjustedCostAtTime += tx.totalCost;
+                     // Fallback: convert using current rates
+                     const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
+                     const costInDisplay = convertCurrencySync(
+                       tx.totalCost,
+                       assetCurrency,
+                       displayCurrency,
+                       exchangeRates
+                     );
+                     costInDisplayAtTime += costInDisplay;
                    }
                }
             });
@@ -319,18 +332,9 @@ export const Summary: React.FC<SummaryProps> = ({
 
             // Detect currency from ticker/asset
             const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
-            
-            // P1.1B CHANGE: Convert FX-adjusted cost to display currency using HISTORICAL rate for date t
-            const costDate = new Date(t);
-            const costInDisplay = convertCurrencySyncHistorical(
-              fxAdjustedCostAtTime,
-              assetCurrency,
-              displayCurrency,
-              costDate,
-              historicalRates,
-              exchangeRates
-            );
-            costStack[asset.id] = costInDisplay;
+
+            // Store the cost basis in display currency
+            costStack[asset.id] = costInDisplayAtTime;
 
             // 🔧 FIX: Check if this is a cash asset (ticker is a currency code)
             const isCashAsset = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD'].includes(asset.ticker.toUpperCase());
@@ -416,7 +420,7 @@ export const Summary: React.FC<SummaryProps> = ({
             
             stack[asset.id] = valInDisplay;
             totalVal += valInDisplay;
-            totalCost += costInDisplay;
+            totalCost += costInDisplayAtTime;
         });
 
         generatedData.push({

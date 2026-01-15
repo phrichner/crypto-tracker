@@ -284,6 +284,15 @@ export function createOrUpdateCashPosition(
 export function detectAssetNativeCurrency(ticker: string): Currency {
   const upper = ticker.toUpperCase();
 
+  // If the ticker IS a currency, return it directly
+  if (upper === 'CHF') return 'CHF';
+  if (upper === 'EUR') return 'EUR';
+  if (upper === 'GBP') return 'GBP';
+  if (upper === 'JPY') return 'JPY';
+  if (upper === 'CAD') return 'CAD';
+  if (upper === 'AUD') return 'AUD';
+  if (upper === 'USD') return 'USD';
+
   // Swiss stocks
   if (upper.endsWith('.SW')) return 'CHF';
 
@@ -304,4 +313,41 @@ export function detectAssetNativeCurrency(ticker: string): Currency {
 
   // Default to USD for US stocks and crypto
   return 'USD';
+}
+
+/**
+ * Get historical price of an asset on a specific date from priceHistory
+ * Falls back to currentPrice if historical data unavailable
+ *
+ * @param asset - Asset to get price for
+ * @param targetDate - Date to get price for (ISO string)
+ * @returns Price on that date, or current price if not found
+ */
+export function getHistoricalPrice(asset: Asset, targetDate: string): number {
+  if (!asset.priceHistory || asset.priceHistory.length === 0) {
+    console.warn(`⚠️ No price history for ${asset.ticker}, using current price`);
+    return asset.currentPrice;
+  }
+
+  const targetTime = new Date(targetDate).getTime();
+
+  // Find the closest price snapshot to the target date
+  let closestPrice = asset.currentPrice;
+  let closestDiff = Infinity;
+
+  for (const [timestamp, price] of asset.priceHistory) {
+    const diff = Math.abs(timestamp - targetTime);
+    if (diff < closestDiff) {
+      closestDiff = diff;
+      closestPrice = price;
+    }
+  }
+
+  // Log if we're using a price from a different day (more than 1 day difference)
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  if (closestDiff > oneDayMs) {
+    console.warn(`⚠️ Historical price for ${asset.ticker} on ${targetDate} is ${closestDiff / oneDayMs} days off, using closest available`);
+  }
+
+  return closestPrice;
 }

@@ -4,6 +4,7 @@ import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiSer
 import { fetchExchangeRates, fetchHistoricalExchangeRatesForDate, fetchHistoricalExchangeRates, convertCurrencySync } from './services/currencyService'; // P1.1B CHANGE: Added fetchHistoricalExchangeRatesForDate
 import { AssetCard } from './components/AssetCard';
 import { AddAssetForm } from './components/AddAssetForm';
+import { TransactionModal } from './components/TransactionModal'; // P3: Cash Flow Management
 import { Summary } from './components/Summary';
 import { TagAnalytics } from './components/TagAnalytics';
 import { RiskMetrics } from './components/RiskMetrics';
@@ -11,7 +12,8 @@ import { ApiKeySettings } from './components/ApiKeySettings';
 import { PortfolioManager } from './components/PortfolioManager';
 import { SellModal } from './components/SellModal';
 import { ClosedPositionsPanel } from './components/ClosedPositionsPanel';
-import { calculateRealizedPnL, createOrUpdateCashPosition, detectAssetNativeCurrency } from './services/portfolioService';
+import { calculateRealizedPnL, createOrUpdateCashPosition, detectAssetNativeCurrency, getHistoricalPrice, isCashAsset } from './services/portfolioService';
+import { validateBuyTransaction, validateSellTransaction, validateWithdrawal, validateTransactionDeletion, getBalanceAtDate } from './services/cashFlowValidation'; // P3: Cash Flow Validation
 import { Wallet, Download, Upload, Settings, Key, FolderOpen, Plus, Check } from 'lucide-react';
 import { testPhase1 } from './services/riskMetricsService'; // P1.2 TEST IMPORT
 
@@ -108,18 +110,8 @@ const App: React.FC = () => {
   const [isPortfolioManagerOpen, setIsPortfolioManagerOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [sellModalAsset, setSellModalAsset] = useState<Asset | null>(null); // P2: Sell modal state
+  const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false); // P3: Transaction modal state
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // P2: Undo notification state
-  const [undoNotification, setUndoNotification] = useState<{
-    visible: boolean;
-    sellTransactionId: string;
-    ticker: string;
-    quantity: number;
-    proceedsCurrency: string;
-    countdown: number;
-  } | null>(null);
-  const undoTimerRef = useRef<number | null>(null);
 
   // P1.1 CHANGE: Lift displayCurrency and exchangeRates to App level
   const [displayCurrency, setDisplayCurrency] = useState<Currency>('USD');
@@ -184,35 +176,6 @@ const App: React.FC = () => {
     };
     loadRates();
   }, []);
-
-  // P2: Cleanup undo timer on unmount
-  useEffect(() => {
-    return () => {
-      if (undoTimerRef.current) {
-        window.clearInterval(undoTimerRef.current);
-      }
-    };
-  }, []);
-
-  // P2: Handle undo countdown
-  useEffect(() => {
-    if (undoNotification?.visible && undoNotification.countdown > 0) {
-      const timer = window.setInterval(() => {
-        setUndoNotification(prev => {
-          if (!prev || prev.countdown <= 1) {
-            return null; // Auto-dismiss
-          }
-          return { ...prev, countdown: prev.countdown - 1 };
-        });
-      }, 1000);
-
-      undoTimerRef.current = timer;
-
-      return () => {
-        window.clearInterval(timer);
-      };
-    }
-  }, [undoNotification?.visible, undoNotification?.countdown]);
 
   // P1.2: Load historical exchange rates for risk metrics
   useEffect(() => {
@@ -751,19 +714,741 @@ const App: React.FC = () => {
   };
 
   const handleRemoveTransaction = (assetId: string, txId: string) => {
-    // P2: Check if this is a SELL transaction and validate
+    // P3: Validate transaction deletion for cash flow integrity
     const asset = assets.find(a => a.id === assetId);
     if (!asset) return;
 
     const txToDelete = asset.transactions.find(tx => tx.id === txId);
     if (!txToDelete) return;
 
+    // P3: Check if this is a transferred transaction (copied from another portfolio)
+    if (txToDelete.transferredFrom) {
+      const sourcePortfolio = portfolios.find(p => p.id === txToDelete.transferredFrom);
+      const sourcePortfolioName = sourcePortfolio ? sourcePortfolio.name : 'the source portfolio';
+
+      alert(
+        `⚠️ Cannot Delete Transferred Transaction\n\n` +
+        `This transaction was transferred from "${sourcePortfolioName}".\n\n` +
+        `To delete it, go to "${sourcePortfolioName}" and delete the TRANSFER transaction there.\n\n` +
+        `Deleting the TRANSFER in the source portfolio will automatically remove this copied transaction.`
+      );
+      return;
+    }
+
+    // P3: Check if deleting this transaction would break cash flow logic
+    const validation = validateTransactionDeletion(asset, txId);
+    if (!validation.valid) {
+      alert(`⚠️ Cannot Delete Transaction\n\n${validation.error}`);
+      return;
+    }
+
+    // P3: Handle WITHDRAWAL transaction deletion
+    if (txToDelete.type === 'WITHDRAWAL') {
+      const confirmed = window.confirm(
+        `⚠️ Delete Withdrawal Transaction?\n\n` +
+        `This will increase your position by ${txToDelete.quantity.toLocaleString()} ${asset.ticker}.\n\n` +
+        `Destination: ${txToDelete.withdrawalDestination}\n` +
+        `Date: ${new Date(txToDelete.date).toLocaleDateString()}\n\n` +
+        `Do you want to continue?`
+      );
+
+      if (!confirmed) return;
+
+      updateActivePortfolio(portfolio => {
+        const assetToUpdate = portfolio.assets.find(a => a.id === assetId);
+        if (!assetToUpdate) return portfolio;
+
+        // Simply remove the WITHDRAWAL transaction
+        // The quantity/cost will be recalculated from remaining acquisition transactions
+        const updatedTxs = assetToUpdate.transactions.filter(tx => tx.id !== txId);
+
+        // Recalculate quantity and cost basis from acquisition transactions
+        const acquisitionTxs = updatedTxs.filter(tx =>
+          tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+        );
+        const newQty = acquisitionTxs.reduce((sum, tx) => sum + tx.quantity, 0);
+        const newCost = acquisitionTxs.reduce((sum, tx) => sum + tx.totalCost, 0);
+
+        if (newQty === 0) {
+          // If no acquisitions left, remove the asset entirely
+          return {
+            ...portfolio,
+            assets: portfolio.assets.filter(a => a.id !== assetId)
+          };
+        }
+
+        return {
+          ...portfolio,
+          assets: portfolio.assets.map(a =>
+            a.id === assetId
+              ? {
+                  ...a,
+                  transactions: updatedTxs,
+                  quantity: newQty,
+                  totalCostBasis: newCost,
+                  avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+                }
+              : a
+          )
+        };
+      });
+
+      return;
+    }
+
+    // P3: Handle TRANSFER transaction deletion (Immutable Architecture)
+    if (txToDelete.type === 'TRANSFER') {
+      const destinationPortfolioId = txToDelete.destinationPortfolioId;
+      if (!destinationPortfolioId) {
+        alert('❌ Cannot delete this TRANSFER transaction: Missing destination portfolio information.');
+        return;
+      }
+
+      const destinationPortfolio = portfolios.find(p => p.id === destinationPortfolioId);
+      if (!destinationPortfolio) {
+        alert(
+          `❌ Cannot delete this TRANSFER transaction.\n\n` +
+          `The destination portfolio no longer exists.\n\n` +
+          `This transfer cannot be reversed.`
+        );
+        return;
+      }
+
+      // Check if the asset still exists in destination portfolio with sufficient quantity
+      const destinationAsset = destinationPortfolio.assets.find(a => a.ticker === asset.ticker);
+
+      if (!destinationAsset) {
+        alert(
+          `❌ Cannot delete this TRANSFER transaction.\n\n` +
+          `${asset.ticker} no longer exists in "${destinationPortfolio.name}".\n\n` +
+          `The asset may have been sold or withdrawn. Please resolve the transaction chain first.`
+        );
+        return;
+      }
+
+      // P3: Chronological validation using getBalanceAtDate
+      const availableBalanceInDest = getBalanceAtDate(destinationAsset, new Date().toISOString());
+
+      if (availableBalanceInDest < txToDelete.quantity) {
+        alert(
+          `❌ Cannot delete this TRANSFER transaction.\n\n` +
+          `Insufficient quantity in "${destinationPortfolio.name}":\n` +
+          `  Required: ${txToDelete.quantity.toLocaleString()} ${asset.ticker}\n` +
+          `  Available: ${availableBalanceInDest.toLocaleString()} ${asset.ticker}\n\n` +
+          `Some of the transferred assets may have been sold or withdrawn.\n` +
+          `Please resolve those transactions first.`
+        );
+        return;
+      }
+
+      // All validations passed - show confirmation
+      const confirmed = window.confirm(
+        `⚠️ Delete Transfer Transaction?\n\n` +
+        `This will:\n` +
+        `  • Restore ${txToDelete.quantity.toLocaleString()} ${asset.ticker} to this portfolio\n` +
+        `  • Remove ${txToDelete.quantity.toLocaleString()} ${asset.ticker} from "${destinationPortfolio.name}"\n\n` +
+        `Date: ${new Date(txToDelete.date).toLocaleDateString()}\n` +
+        `Cost Basis: ${txToDelete.totalCost.toLocaleString()} ${activePortfolio.settings?.displayCurrency || 'USD'}\n\n` +
+        `Do you want to continue?`
+      );
+
+      if (!confirmed) return;
+
+      // P3 FIX: Simply remove TRANSFER transaction from source and recalculate
+      // No need to add restoration transaction - removing TRANSFER increases position automatically
+      updateActivePortfolio(sourcePortfolio => {
+        const assetToUpdate = sourcePortfolio.assets.find(a => a.id === assetId);
+        if (!assetToUpdate) {
+          // Asset doesn't exist in source - need to recreate it with restored transactions
+          // This happens when the transfer was for the full amount
+
+          // Calculate which acquisition transactions to restore using FIFO
+          const sortedDestAcquisitions = [...destinationAsset.transactions]
+            .filter(tx => tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME')
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+          let remainingToRestore = txToDelete.quantity;
+          const restoredTxs: Transaction[] = [];
+
+          for (const tx of sortedDestAcquisitions) {
+            if (remainingToRestore <= 0) break;
+
+            const qtyFromThisTx = Math.min(remainingToRestore, tx.quantity);
+            const costFromThisTx = (qtyFromThisTx / tx.quantity) * tx.totalCost;
+
+            restoredTxs.push({
+              ...tx,
+              id: Math.random().toString(36).substr(2, 9), // New ID for source
+              quantity: qtyFromThisTx,
+              totalCost: costFromThisTx
+            });
+
+            remainingToRestore -= qtyFromThisTx;
+          }
+
+          // Recreate the asset in source portfolio
+          const restoredAsset: Asset = {
+            id: assetId, // Use original asset ID
+            ticker: asset.ticker,
+            name: asset.name,
+            quantity: txToDelete.quantity,
+            currentPrice: asset.currentPrice,
+            lastUpdated: new Date().toISOString(),
+            sources: asset.sources,
+            isUpdating: false,
+            transactions: restoredTxs,
+            avgBuyPrice: txToDelete.totalCost / txToDelete.quantity,
+            totalCostBasis: txToDelete.totalCost,
+            coinGeckoId: asset.coinGeckoId,
+            assetType: asset.assetType,
+            currency: asset.currency
+          };
+
+          return {
+            ...sourcePortfolio,
+            assets: [...sourcePortfolio.assets, restoredAsset]
+          };
+        }
+
+        // Asset exists in source - simply remove TRANSFER transaction
+        const updatedTxs = assetToUpdate.transactions.filter(tx => tx.id !== txId);
+
+        // Recalculate position: acquisitions - disposals
+        const acquisitions = updatedTxs.filter(tx =>
+          tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+        );
+        const disposals = updatedTxs.filter(tx =>
+          tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+        );
+
+        const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+        const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+        const newQty = totalAcquired - totalDisposed;
+
+        const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+        const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+        const newCost = totalCostAcquired - totalCostDisposed;
+
+        return {
+          ...sourcePortfolio,
+          assets: sourcePortfolio.assets.map(a =>
+            a.id === assetId
+              ? {
+                  ...a,
+                  transactions: updatedTxs,
+                  quantity: newQty,
+                  totalCostBasis: newCost,
+                  avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+                }
+              : a
+          )
+        };
+      });
+
+      // P3 FIX: Remove the copied acquisition transactions from destination portfolio
+      // Find and remove transactions that match the transfer date and amount
+      setPortfolios(prevPortfolios =>
+        prevPortfolios.map(p => {
+          if (p.id !== destinationPortfolioId) return p;
+
+          const destAsset = p.assets.find(a => a.ticker === asset.ticker);
+          if (!destAsset) return p;
+
+          // P3: Remove transactions that were added during the transfer
+          // Prioritize transactions marked with transferredFrom matching current portfolio
+          const sortedAcquisitions = [...destAsset.transactions]
+            .filter(tx => tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME')
+            .sort((a, b) => {
+              // Sort by transferredFrom marker first (matching active portfolio ID comes first)
+              const aIsTransferred = a.transferredFrom === activePortfolio.id ? 0 : 1;
+              const bIsTransferred = b.transferredFrom === activePortfolio.id ? 0 : 1;
+              if (aIsTransferred !== bIsTransferred) return aIsTransferred - bIsTransferred;
+              // Then sort by date (FIFO)
+              return new Date(a.date).getTime() - new Date(b.date).getTime();
+            });
+
+          let remainingToRemove = txToDelete.quantity;
+          const txsToKeep: Transaction[] = [];
+
+          // Use FIFO to identify which transactions to remove (prioritizing marked ones)
+          for (const tx of sortedAcquisitions) {
+            if (remainingToRemove <= 0) {
+              txsToKeep.push(tx);
+              continue;
+            }
+
+            if (tx.quantity <= remainingToRemove) {
+              // Fully consume this transaction
+              remainingToRemove -= tx.quantity;
+              // Don't add to txsToKeep (remove it)
+            } else {
+              // Partial consumption - split the transaction
+              const qtyToRemove = remainingToRemove;
+              const costToRemove = (qtyToRemove / tx.quantity) * tx.totalCost;
+
+              txsToKeep.push({
+                ...tx,
+                quantity: tx.quantity - qtyToRemove,
+                totalCost: tx.totalCost - costToRemove
+              });
+
+              remainingToRemove = 0;
+            }
+          }
+
+          // Keep all non-acquisition transactions
+          const nonAcquisitions = destAsset.transactions.filter(tx =>
+            tx.type !== 'BUY' && tx.type !== 'DEPOSIT' && tx.type !== 'INCOME'
+          );
+
+          const finalTxs = [...txsToKeep, ...nonAcquisitions];
+
+          // Recalculate destination position
+          const destAcquisitions = finalTxs.filter(tx =>
+            tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+          );
+          const destDisposals = finalTxs.filter(tx =>
+            tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+          );
+
+          const destTotalAcquired = destAcquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+          const destTotalDisposed = destDisposals.reduce((sum, tx) => sum + tx.quantity, 0);
+          const newDestQty = destTotalAcquired - destTotalDisposed;
+
+          const destTotalCostAcquired = destAcquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+          const destTotalCostDisposed = destDisposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+          const newDestCost = destTotalCostAcquired - destTotalCostDisposed;
+
+          if (newDestQty === 0) {
+            // Remove asset from destination portfolio
+            return {
+              ...p,
+              assets: p.assets.filter(a => a.id !== destAsset.id)
+            };
+          } else {
+            // Update asset in destination portfolio
+            return {
+              ...p,
+              assets: p.assets.map(a =>
+                a.id === destAsset.id
+                  ? {
+                      ...a,
+                      transactions: finalTxs,
+                      quantity: newDestQty,
+                      totalCostBasis: newDestCost,
+                      avgBuyPrice: newDestQty > 0 ? newDestCost / newDestQty : 0
+                    }
+                  : a
+              )
+            };
+          }
+        })
+      );
+
+      return;
+    }
+
+    // P3: Handle BUY transaction deletion with reversal logic
+    if (txToDelete.type === 'BUY') {
+      // P4: Check if this BUY transaction has a linked SELL transaction
+      if (txToDelete.linkedBuySellTransactionId) {
+        // Find the linked SELL transaction across all assets
+        const linkedTxData = assets
+          .flatMap(a => a.transactions.map(tx => ({ asset: a, tx })))
+          .find(({ tx }) => tx.id === txToDelete.linkedBuySellTransactionId);
+
+        if (!linkedTxData) {
+          // Linked transaction not found - possibly old transaction before linking was implemented
+          const confirmed = window.confirm(
+            `⚠️ Warning: Cannot find the linked source transaction.\n\n` +
+            `This BUY transaction was created before transaction linking was implemented, or the source transaction has been deleted.\n\n` +
+            `Deleting it will NOT restore the source asset.\n\n` +
+            `Do you want to continue?`
+          );
+          if (!confirmed) return;
+          // Proceed with simple deletion (handled at end of function)
+        } else {
+          // Found linked SELL transaction - show comprehensive warning
+          const sourceTicker = linkedTxData.asset.ticker;
+          const sourceQuantity = txToDelete.sourceQuantity || 0;
+
+          const confirmed = window.confirm(
+            `⚠️ Delete Buy Transaction?\n\n` +
+            `This will delete BOTH transactions:\n` +
+            `  • BUY: ${txToDelete.quantity.toLocaleString()} ${asset.ticker}\n` +
+            `  • SELL: ${sourceQuantity.toLocaleString()} ${sourceTicker}\n\n` +
+            `The ${sourceTicker} will be restored to your portfolio.\n\n` +
+            `Date: ${new Date(txToDelete.date).toLocaleDateString()}\n\n` +
+            `Do you want to continue?`
+          );
+
+          if (!confirmed) return;
+
+          // Delete both transactions atomically
+          updateActivePortfolio(portfolio => {
+            let updatedAssets = [...portfolio.assets];
+            let updatedClosedPositions = [...(portfolio.closedPositions || [])];
+
+            // Remove closed positions created by the linked SELL transaction
+            const linkedSellTxId = txToDelete.linkedBuySellTransactionId;
+            const closedPositionsToRemove = updatedClosedPositions.filter(
+              cp => cp.sellTransactionId === linkedSellTxId
+            );
+
+            if (closedPositionsToRemove.length > 0) {
+              console.log(`🧹 Removing ${closedPositionsToRemove.length} closed positions from reversed BUY/SELL pair`);
+              updatedClosedPositions = updatedClosedPositions.filter(
+                cp => cp.sellTransactionId !== linkedSellTxId
+              );
+            }
+
+            // 1. Remove BUY transaction from destination asset
+            updatedAssets = updatedAssets.map(a => {
+              if (a.id !== assetId) return a;
+              const updatedTxs = a.transactions.filter(tx => tx.id !== txId);
+
+              // Recalculate position
+              const acquisitions = updatedTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const disposals = updatedTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newQty = totalAcquired - totalDisposed;
+
+              const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newCost = totalCostAcquired - totalCostDisposed;
+
+              if (newQty === 0 && updatedTxs.length === 0) {
+                return null; // Remove asset if no transactions remain
+              }
+
+              return {
+                ...a,
+                transactions: updatedTxs,
+                quantity: newQty,
+                totalCostBasis: newCost,
+                avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+              };
+            }).filter(a => a !== null) as Asset[];
+
+            // 2. Remove SELL transaction from source asset (this automatically restores the quantity)
+            updatedAssets = updatedAssets.map(a => {
+              if (a.id !== linkedTxData.asset.id) return a;
+              const updatedTxs = a.transactions.filter(tx => tx.id !== txToDelete.linkedBuySellTransactionId);
+
+              // Recalculate position
+              const acquisitions = updatedTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const disposals = updatedTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newQty = totalAcquired - totalDisposed;
+
+              const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newCost = totalCostAcquired - totalCostDisposed;
+
+              return {
+                ...a,
+                transactions: updatedTxs,
+                quantity: newQty,
+                totalCostBasis: newCost,
+                avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+              };
+            });
+
+            return {
+              ...portfolio,
+              assets: updatedAssets,
+              closedPositions: updatedClosedPositions
+            };
+          });
+
+          return;
+        }
+      }
+
+      // Fallback for old BUY transactions without linking OR if linked transaction not found
+      // Check if this BUY transaction has source information (what was paid with)
+      if (txToDelete.sourceTicker && txToDelete.sourceQuantity) {
+        // This is a BUY transaction where user paid with another asset
+        // We need to restore the source asset (reverse the payment)
+        const sourceTicker = txToDelete.sourceTicker.toUpperCase();
+        const sourceQuantity = txToDelete.sourceQuantity;
+        const sourceValue = txToDelete.totalCost; // The cost basis of what was purchased
+
+        const confirmed = window.confirm(
+          `⚠️ Delete Buy Transaction?\n\n` +
+          `This will:\n` +
+          `  • Remove ${txToDelete.quantity.toLocaleString()} ${asset.ticker}\n` +
+          `  • Restore ${sourceQuantity.toLocaleString()} ${sourceTicker}\n\n` +
+          `Date: ${new Date(txToDelete.date).toLocaleDateString()}\n` +
+          `Cost: ${sourceValue.toLocaleString()} ${displayCurrency}\n\n` +
+          `Do you want to continue?`
+        );
+
+        if (!confirmed) return;
+
+        updateActivePortfolio(portfolio => {
+          // 1. Remove the BUY transaction from the destination asset
+          let updatedAssets = portfolio.assets.map(assetItem => {
+            if (assetItem.id !== assetId) return assetItem;
+            const updatedTxs = assetItem.transactions.filter(tx => tx.id !== txId);
+
+            // Recalculate position
+            const acquisitions = updatedTxs.filter(tx =>
+              tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+            );
+            const disposals = updatedTxs.filter(tx =>
+              tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+            );
+
+            const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+            const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+            const newQty = totalAcquired - totalDisposed;
+
+            const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+            const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+            const newCost = totalCostAcquired - totalCostDisposed;
+
+            if (newQty === 0 && updatedTxs.length === 0) {
+              // Remove asset if no transactions remain
+              return null;
+            }
+
+            return {
+              ...assetItem,
+              transactions: updatedTxs,
+              quantity: newQty,
+              totalCostBasis: newCost,
+              avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+            };
+          }).filter(a => a !== null) as Asset[];
+
+          // 2. Restore the source asset (add back what was paid)
+          const sourceAsset = updatedAssets.find(a => a.ticker.toUpperCase() === sourceTicker);
+
+          if (sourceAsset) {
+            // Source asset exists - add back the quantity
+            updatedAssets = updatedAssets.map(a => {
+              if (a.ticker.toUpperCase() !== sourceTicker) return a;
+
+              // Create a restoration transaction
+              const restorationTx: Transaction = {
+                id: Math.random().toString(36).substr(2, 9),
+                type: 'DEPOSIT',
+                quantity: sourceQuantity,
+                pricePerCoin: sourceValue / sourceQuantity,
+                date: txToDelete.date,
+                totalCost: sourceValue,
+                tag: txToDelete.tag || 'DCA',
+                createdAt: new Date().toISOString(),
+                depositSource: `Restored from deleted BUY of ${asset.ticker}`
+              };
+
+              const updatedTxs = [...a.transactions, restorationTx];
+
+              // Recalculate
+              const acquisitions = updatedTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const disposals = updatedTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newQty = totalAcquired - totalDisposed;
+
+              const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newCost = totalCostAcquired - totalCostDisposed;
+
+              return {
+                ...a,
+                transactions: updatedTxs,
+                quantity: newQty,
+                totalCostBasis: newCost,
+                avgBuyPrice: newQty > 0 ? newCost / newQty : 0,
+                lastUpdated: new Date().toISOString()
+              };
+            });
+          } else {
+            // Source asset doesn't exist - recreate it
+            const newSourceAsset: Asset = {
+              id: Math.random().toString(36).substr(2, 9),
+              ticker: sourceTicker,
+              name: sourceTicker,
+              quantity: sourceQuantity,
+              currentPrice: sourceValue / sourceQuantity,
+              lastUpdated: new Date().toISOString(),
+              sources: [],
+              isUpdating: false,
+              transactions: [{
+                id: Math.random().toString(36).substr(2, 9),
+                type: 'DEPOSIT',
+                quantity: sourceQuantity,
+                pricePerCoin: sourceValue / sourceQuantity,
+                date: txToDelete.date,
+                totalCost: sourceValue,
+                tag: txToDelete.tag || 'DCA',
+                createdAt: new Date().toISOString(),
+                depositSource: `Restored from deleted BUY of ${asset.ticker}`
+              }],
+              avgBuyPrice: sourceValue / sourceQuantity,
+              totalCostBasis: sourceValue,
+              assetType: 'CASH',
+              currency: sourceTicker as Currency
+            };
+
+            updatedAssets = [...updatedAssets, newSourceAsset];
+          }
+
+          return {
+            ...portfolio,
+            assets: updatedAssets
+          };
+        });
+
+        return;
+      }
+
+      // BUY transaction without source info - check if it's proceeds from a SELL
+      // (handled below in SELL logic)
+    }
+
+    // P2: Check if this is a SELL transaction and validate
+
     // P2: If deleting a SELL transaction, check for proceeds and warn user
     if (txToDelete.type === 'SELL' && txToDelete.proceedsCurrency) {
-      const proceedsTicker = txToDelete.proceedsCurrency;
-      const proceedsAsset = assets.find(a => a.ticker === proceedsTicker);
+      // P4: Check if this SELL has a linked BUY transaction (from BUY with another asset)
+      if (txToDelete.linkedBuySellTransactionId) {
+        // Find the linked BUY transaction
+        const linkedBuyTxData = assets
+          .flatMap(a => a.transactions.map(tx => ({ asset: a, tx })))
+          .find(({ tx }) => tx.id === txToDelete.linkedBuySellTransactionId);
 
-      if (proceedsAsset) {
+        if (linkedBuyTxData) {
+          // Show warning that both will be deleted
+          const confirmed = window.confirm(
+            `⚠️ Delete Sell Transaction?\n\n` +
+            `This SELL is part of a BUY transaction pair.\n\n` +
+            `Deleting it will also delete:\n` +
+            `  • BUY: ${linkedBuyTxData.tx.quantity.toLocaleString()} ${linkedBuyTxData.asset.ticker}\n\n` +
+            `Your ${asset.ticker} position will be restored.\n\n` +
+            `Do you want to continue?`
+          );
+
+          if (!confirmed) return;
+
+          // Delete both transactions atomically (same logic as BUY deletion)
+          updateActivePortfolio(portfolio => {
+            let updatedAssets = [...portfolio.assets];
+            let updatedClosedPositions = [...(portfolio.closedPositions || [])];
+
+            // Remove closed positions created by this SELL transaction
+            const closedPositionsToRemove = updatedClosedPositions.filter(
+              cp => cp.sellTransactionId === txId
+            );
+
+            if (closedPositionsToRemove.length > 0) {
+              console.log(`🧹 Removing ${closedPositionsToRemove.length} closed positions from reversed BUY/SELL pair`);
+              updatedClosedPositions = updatedClosedPositions.filter(
+                cp => cp.sellTransactionId !== txId
+              );
+            }
+
+            // 1. Remove SELL transaction from source asset (this restores the quantity)
+            updatedAssets = updatedAssets.map(a => {
+              if (a.id !== assetId) return a;
+              const updatedTxs = a.transactions.filter(tx => tx.id !== txId);
+
+              // Recalculate position
+              const acquisitions = updatedTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const disposals = updatedTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newQty = totalAcquired - totalDisposed;
+
+              const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newCost = totalCostAcquired - totalCostDisposed;
+
+              return {
+                ...a,
+                transactions: updatedTxs,
+                quantity: newQty,
+                totalCostBasis: newCost,
+                avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+              };
+            });
+
+            // 2. Remove BUY transaction from destination asset
+            updatedAssets = updatedAssets.map(a => {
+              if (a.id !== linkedBuyTxData.asset.id) return a;
+              const updatedTxs = a.transactions.filter(tx => tx.id !== txToDelete.linkedBuySellTransactionId);
+
+              // Recalculate position
+              const acquisitions = updatedTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const disposals = updatedTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newQty = totalAcquired - totalDisposed;
+
+              const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newCost = totalCostAcquired - totalCostDisposed;
+
+              if (newQty === 0 && updatedTxs.length === 0) {
+                return null; // Remove asset if no transactions remain
+              }
+
+              return {
+                ...a,
+                transactions: updatedTxs,
+                quantity: newQty,
+                totalCostBasis: newCost,
+                avgBuyPrice: newQty > 0 ? newCost / newQty : 0
+              };
+            }).filter(a => a !== null) as Asset[];
+
+            return {
+              ...portfolio,
+              assets: updatedAssets,
+              closedPositions: updatedClosedPositions
+            };
+          });
+
+          return;
+        }
+      }
+
+      // Fallback: Old logic for SELL transactions without linking
+      // SKIP this block if SELL has linkedBuySellTransactionId (already handled above)
+      if (!txToDelete.linkedBuySellTransactionId) {
+        const proceedsTicker = txToDelete.proceedsCurrency;
+        const proceedsAsset = assets.find(a => a.ticker === proceedsTicker);
+
+        if (proceedsAsset) {
         // P2 FIX: Check for FULL transaction chain before allowing deletion
         const proceedsTickerBase = proceedsAsset.ticker.toUpperCase().split(' ')[0];
         const fullChain = findTransactionChain(proceedsTickerBase);
@@ -1003,6 +1688,7 @@ const App: React.FC = () => {
           };
         });
       }
+      } // End of if (!txToDelete.linkedBuySellTransactionId) check
     } else {
       // P2 FIX: Check if this BUY transaction is proceeds from a SELL
       // Look for SELL transactions that created this asset
@@ -1057,7 +1743,7 @@ const App: React.FC = () => {
         }
       }
 
-      // Normal BUY transaction deletion
+      // Normal BUY transaction deletion (no source information, not proceeds from SELL)
       updateActivePortfolio(portfolio => ({
         ...portfolio,
         assets: portfolio.assets.map(assetItem => {
@@ -1105,139 +1791,6 @@ const App: React.FC = () => {
         };
       })
     }));
-  };
-
-  // P2: Undo sell transaction
-  const handleUndoSell = () => {
-    if (!undoNotification) return;
-
-    const { sellTransactionId, proceedsCurrency } = undoNotification;
-
-    console.log('🔄 Undoing sell transaction:', sellTransactionId);
-
-    // Find the proceeds asset to delete
-    const proceedsAsset = assets.find(a => {
-      const assetTicker = a.ticker.toUpperCase().split(' ')[0];
-      const proceedsTicker = proceedsCurrency.toUpperCase().split(' ')[0];
-      return assetTicker === proceedsTicker;
-    });
-
-    if (!proceedsAsset) {
-      console.warn('⚠️ Proceeds asset not found for undo');
-      setUndoNotification(null);
-      return;
-    }
-
-    // Find the asset that was sold
-    const soldAsset = assets.find(a => {
-      return a.transactions.some(tx => tx.id === sellTransactionId);
-    });
-
-    if (!soldAsset) {
-      console.warn('⚠️ Sold asset not found for undo');
-      setUndoNotification(null);
-      return;
-    }
-
-    // Use the same logic as handleRemoveTransaction for SELL
-    updateActivePortfolio(portfolio => {
-      // Remove the proceeds asset
-      let updatedAssets = portfolio.assets.filter(a => a.id !== proceedsAsset.id);
-
-      // Restore the sold asset
-      const assetToRestore = portfolio.assets.find(a => a.id === soldAsset.id);
-      if (assetToRestore) {
-        // Remove the SELL transaction
-        let filteredTxs = assetToRestore.transactions.filter(tx => tx.id !== sellTransactionId);
-
-        // Find closed positions for this sell to restore BUY transactions
-        const relatedClosedPositions = (portfolio.closedPositions || []).filter(
-          cp => cp.sellTransactionId === sellTransactionId
-        );
-
-        console.log('🔄 Restoring', relatedClosedPositions.length, 'closed positions for', assetToRestore.ticker);
-
-        // Recreate consumed BUY transactions
-        relatedClosedPositions.forEach(cp => {
-          const existingBuyTx = filteredTxs.find(t => t.id === cp.buyTransactionId);
-
-          if (existingBuyTx) {
-            // Partial consumption - add back the consumed quantity
-            filteredTxs = filteredTxs.map(t =>
-              t.id === cp.buyTransactionId
-                ? {
-                    ...t,
-                    quantity: t.quantity + cp.entryQuantity,
-                    totalCost: t.totalCost + cp.entryCostBasis
-                  }
-                : t
-            );
-          } else {
-            // Full consumption - recreate the BUY transaction
-            const recreatedBuyTx: Transaction = {
-              id: cp.buyTransactionId,
-              type: 'BUY',
-              quantity: cp.entryQuantity,
-              pricePerCoin: cp.entryPrice,
-              date: cp.entryDate,
-              totalCost: cp.entryCostBasis,
-              tag: cp.entryTag || 'DCA',
-              createdAt: new Date().toISOString(),
-              purchaseCurrency: cp.entryCurrency as Currency,
-              exchangeRateAtPurchase: undefined
-            };
-            filteredTxs.push(recreatedBuyTx);
-          }
-        });
-
-        // Recalculate from restored transactions
-        const buyTxs = filteredTxs.filter(t => t.type === 'BUY');
-        const newQty = buyTxs.reduce((sum, t) => sum + t.quantity, 0);
-        const newCost = buyTxs.reduce((sum, t) => sum + t.totalCost, 0);
-
-        updatedAssets = updatedAssets.map(a =>
-          a.id === soldAsset.id
-            ? {
-                ...a,
-                transactions: filteredTxs,
-                quantity: newQty,
-                totalCostBasis: newCost,
-                avgBuyPrice: newQty > 0 ? newCost / newQty : 0
-              }
-            : a
-        );
-      }
-
-      // Remove from closed positions
-      let updatedClosedPositions = (portfolio.closedPositions || []).filter(
-        cp => cp.sellTransactionId !== sellTransactionId
-      );
-
-      // Clean up orphaned closed positions from the deleted proceeds asset
-      const deletedAssetTicker = proceedsAsset.ticker.toUpperCase().split(' ')[0];
-      const orphanedClosedPositions = updatedClosedPositions.filter(cp => {
-        const cpTicker = cp.ticker.toUpperCase().split(' ')[0];
-        return cpTicker === deletedAssetTicker;
-      });
-
-      if (orphanedClosedPositions.length > 0) {
-        console.log('🧹 Cleaning up', orphanedClosedPositions.length, 'orphaned closed positions for', deletedAssetTicker);
-        updatedClosedPositions = updatedClosedPositions.filter(cp => {
-          const cpTicker = cp.ticker.toUpperCase().split(' ')[0];
-          return cpTicker !== deletedAssetTicker;
-        });
-      }
-
-      return {
-        ...portfolio,
-        assets: updatedAssets,
-        closedPositions: updatedClosedPositions
-      };
-    });
-
-    // Clear notification
-    setUndoNotification(null);
-    console.log('✅ Sell transaction undone');
   };
 
   // P2: Trading Lifecycle - Sell Asset Handler
@@ -1414,18 +1967,881 @@ const App: React.FC = () => {
       console.log(`✅ Sold ${quantity} ${asset.ticker} for ${proceedsCurrency} ${isCryptoToCrypto ? pricePerCoinOrQtyReceived.toFixed(8) : totalProceeds.toFixed(2)}`);
       console.log(`💰 Realized P&L: ${displayCurrency} ${result.realizedPnL.toFixed(2)} (${result.realizedPnLPercent.toFixed(2)}%)`);
 
-      // P2: Show undo notification for 10 seconds
-      setUndoNotification({
-        visible: true,
-        sellTransactionId,
-        ticker: asset.ticker,
-        quantity,
-        proceedsCurrency,
-        countdown: 10
-      });
-
     } catch (error) {
       console.error('❌ Sell transaction failed:', error);
+      throw error;
+    }
+  };
+
+  // ============================================================================
+  // P3: CASH FLOW MANAGEMENT HANDLERS
+  // ============================================================================
+
+  /**
+   * Handle DEPOSIT transaction
+   * Creates or updates an asset with a DEPOSIT transaction
+   */
+  const handleDeposit = async (
+    ticker: string,
+    quantity: number,
+    costBasis: number, // User-provided cost basis (for crypto/stocks deposited from elsewhere)
+    date: string,
+    depositSource: string,
+    tag?: TransactionTag,
+    costBasisCurrency?: Currency
+  ) => {
+    try {
+      // Parse date in local timezone
+      const [year, month, day] = date.split('-').map(Number);
+      const localDate = new Date(year, month - 1, day);
+
+      // Fetch historical FX rates for the deposit date
+      let historicalRates: Record<Currency, number> | undefined;
+      try {
+        historicalRates = await fetchHistoricalExchangeRatesForDate(localDate);
+      } catch (error) {
+        console.warn(`⚠️ Failed to fetch historical FX rates for ${date}:`, error);
+      }
+
+      // Detect asset currency
+      const assetCurrency = detectAssetNativeCurrency(ticker);
+
+      // Use provided currency for cost basis, fallback to detected asset currency
+      const purchaseCurrency = costBasisCurrency || assetCurrency;
+
+      // Create DEPOSIT transaction
+      const depositTx: Transaction = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'DEPOSIT',
+        quantity,
+        pricePerCoin: costBasis / quantity, // Cost basis per unit
+        date,
+        totalCost: costBasis,
+        tag: tag || 'DCA',
+        createdAt: new Date().toISOString(),
+        purchaseCurrency: purchaseCurrency,
+        exchangeRateAtPurchase: historicalRates,
+        costBasis,
+        depositSource
+      };
+
+      // Find existing asset or create new one
+      const existingAsset = assets.find(a => a.ticker.toUpperCase() === ticker.toUpperCase());
+
+      if (existingAsset) {
+        // Update existing asset
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a =>
+            a.id === existingAsset.id
+              ? {
+                  ...a,
+                  quantity: a.quantity + quantity,
+                  transactions: [...a.transactions, depositTx],
+                  totalCostBasis: a.totalCostBasis + costBasis,
+                  avgBuyPrice: (a.totalCostBasis + costBasis) / (a.quantity + quantity),
+                  lastUpdated: new Date().toISOString()
+                }
+              : a
+          )
+        }));
+
+        console.log(`✅ Deposited ${quantity} ${ticker} to existing position`);
+      } else {
+        // Create new asset - this will fetch price
+        await handleAddAsset(ticker, quantity, costBasis / quantity, date, assetCurrency, tag || 'DCA');
+
+        // Update the transaction type to DEPOSIT and set correct purchaseCurrency
+        // Match by the most recent transaction (should be the one we just added)
+        updateActivePortfolio(portfolio => {
+          const updatedPortfolio = {
+            ...portfolio,
+            assets: portfolio.assets.map(a => {
+              if (a.ticker.toUpperCase() === ticker.toUpperCase()) {
+                // Find the most recent transaction (the one we just added)
+                const sortedTxs = [...a.transactions].sort((a, b) =>
+                  new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime()
+                );
+
+                const updatedTxs = a.transactions.map((tx) => {
+                  // Update the most recent transaction to be a DEPOSIT with correct currency
+                  if (tx.id === sortedTxs[0]?.id) {
+                    return {
+                      ...tx,
+                      type: 'DEPOSIT',
+                      depositSource,
+                      costBasis,
+                      purchaseCurrency: purchaseCurrency,
+                      exchangeRateAtPurchase: historicalRates
+                    };
+                  }
+                  return tx;
+                });
+
+                return {
+                  ...a,
+                  transactions: updatedTxs
+                };
+              }
+              return a;
+            })
+          };
+          return updatedPortfolio;
+        });
+
+        console.log(`✅ Created new position with ${quantity} ${ticker} deposit`);
+      }
+    } catch (error) {
+      console.error('❌ Deposit transaction failed:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Handle INCOME transaction
+   * Records income with $0 cost basis (dividends, staking, airdrops)
+   */
+  const handleIncome = async (
+    ticker: string,
+    quantity: number,
+    date: string,
+    incomeType: 'dividend' | 'staking' | 'airdrop' | 'interest',
+    incomeSource: string,
+    tag?: TransactionTag,
+    costBasis?: number,
+    costBasisCurrency?: Currency
+  ) => {
+    try {
+      // Parse date in local timezone
+      const [year, month, day] = date.split('-').map(Number);
+      const localDate = new Date(year, month - 1, day);
+
+      // Fetch historical FX rates for the income date
+      let historicalRates: Record<Currency, number> | undefined;
+      try {
+        historicalRates = await fetchHistoricalExchangeRatesForDate(localDate);
+      } catch (error) {
+        console.warn(`⚠️ Failed to fetch historical FX rates for ${date}:`, error);
+      }
+
+      // Detect asset currency
+      const assetCurrency = detectAssetNativeCurrency(ticker);
+
+      // Use provided currency for cost basis, fallback to detected asset currency
+      const purchaseCurrency = costBasisCurrency || assetCurrency;
+
+      // Use provided cost basis or default to $0
+      const finalCostBasis = costBasis ?? 0;
+      const pricePerUnit = quantity > 0 ? finalCostBasis / quantity : 0;
+
+      // Create INCOME transaction
+      const incomeTx: Transaction = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'INCOME',
+        quantity,
+        pricePerCoin: pricePerUnit,
+        date,
+        totalCost: finalCostBasis,
+        tag: tag || 'Research',
+        createdAt: new Date().toISOString(),
+        purchaseCurrency: purchaseCurrency,
+        exchangeRateAtPurchase: historicalRates,
+        incomeType,
+        incomeSource,
+        costBasis: finalCostBasis
+      };
+
+      // Find existing asset or create new one
+      const existingAsset = assets.find(a => a.ticker.toUpperCase() === ticker.toUpperCase());
+
+      if (existingAsset) {
+        // Update existing asset - add quantity and cost basis
+        const newTotalCostBasis = existingAsset.totalCostBasis + finalCostBasis;
+        const newQuantity = existingAsset.quantity + quantity;
+
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a =>
+            a.id === existingAsset.id
+              ? {
+                  ...a,
+                  quantity: newQuantity,
+                  totalCostBasis: newTotalCostBasis,
+                  transactions: [...a.transactions, incomeTx],
+                  avgBuyPrice: newQuantity > 0 ? newTotalCostBasis / newQuantity : 0,
+                  lastUpdated: new Date().toISOString()
+                }
+              : a
+          )
+        }));
+
+        console.log(`✅ Received ${quantity} ${ticker} as ${incomeType} income (cost basis: ${finalCostBasis > 0 ? `$${finalCostBasis}` : '$0'})`);
+      } else {
+        // Create new asset with provided cost basis
+        await handleAddAsset(ticker, quantity, finalCostBasis, date, assetCurrency, tag || 'Research');
+
+        // Update the transaction type to INCOME
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a => {
+            if (a.ticker.toUpperCase() === ticker.toUpperCase()) {
+              return {
+                ...a,
+                transactions: a.transactions.map(tx =>
+                  tx.createdAt === incomeTx.createdAt
+                    ? { ...tx, type: 'INCOME', incomeType, incomeSource }
+                    : tx
+                )
+              };
+            }
+            return a;
+          })
+        }));
+
+        console.log(`✅ Created new position with ${quantity} ${ticker} income (${incomeType})`);
+      }
+    } catch (error) {
+      console.error('❌ Income transaction failed:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Handle WITHDRAWAL transaction (to external destination, not portfolio transfer)
+   * Removes quantity from asset and records transaction with P&L = 0
+   */
+  const handleWithdrawal = (
+    asset: Asset,
+    quantity: number,
+    date: string,
+    withdrawalDestination: string,
+    tag?: TransactionTag
+  ) => {
+    try {
+      // P3 FIX: Use FIFO to calculate cost basis but DON'T modify acquisition transactions
+      // This allows proper restoration when deleting withdrawals
+      const sortedAcquisitionTxs = [...asset.transactions]
+        .filter(tx => tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME')
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      let remainingToWithdraw = quantity;
+      let costBasisWithdrawn = 0;
+
+      // Calculate cost basis using FIFO (without modifying transactions)
+      for (const tx of sortedAcquisitionTxs) {
+        if (remainingToWithdraw <= 0) break;
+
+        const qtyFromThisTx = Math.min(remainingToWithdraw, tx.quantity);
+        const costFromThisTx = (qtyFromThisTx / tx.quantity) * tx.totalCost;
+
+        remainingToWithdraw -= qtyFromThisTx;
+        costBasisWithdrawn += costFromThisTx;
+      }
+
+      // Calculate average price for withdrawn quantity
+      const avgPriceWithdrawn = quantity > 0 ? costBasisWithdrawn / quantity : 0;
+
+      // Create WITHDRAWAL transaction (shows cost basis, but P&L = 0)
+      const withdrawalTx: Transaction = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'WITHDRAWAL',
+        quantity,
+        pricePerCoin: avgPriceWithdrawn,
+        date,
+        totalCost: costBasisWithdrawn,
+        tag: tag || 'Profit-Taking',
+        createdAt: new Date().toISOString(),
+        withdrawalDestination
+      };
+
+      // Add withdrawal transaction to history (keep all existing transactions intact)
+      const updatedTxs = [...asset.transactions, withdrawalTx];
+
+      // Recalculate position: acquisitions - (sells + withdrawals + transfers)
+      const acquisitions = updatedTxs.filter(tx =>
+        tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+      );
+      const disposals = updatedTxs.filter(tx =>
+        tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+      );
+
+      const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+      const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+      const newQty = totalAcquired - totalDisposed;
+
+      // Cost basis calculation using FIFO
+      const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+      const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+      const newCost = totalCostAcquired - totalCostDisposed;
+
+      const isFullWithdrawal = newQty === 0;
+
+      if (isFullWithdrawal) {
+        // Remove asset entirely
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.filter(a => a.id !== asset.id)
+        }));
+
+        console.log(`✅ Withdrew all ${asset.ticker} (full withdrawal, cost basis: $${costBasisWithdrawn.toFixed(2)})`);
+      } else {
+        // Partial withdrawal - update asset
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a =>
+            a.id === asset.id
+              ? {
+                  ...a,
+                  quantity: newQty,
+                  transactions: updatedTxs,
+                  totalCostBasis: newCost,
+                  avgBuyPrice: newQty > 0 ? newCost / newQty : 0,
+                  lastUpdated: new Date().toISOString()
+                }
+              : a
+          )
+        }));
+
+        console.log(`✅ Withdrew ${quantity} ${asset.ticker} (partial withdrawal, cost basis: $${costBasisWithdrawn.toFixed(2)})`);
+      }
+    } catch (error) {
+      console.error('❌ Withdrawal transaction failed:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * P3: Handle BUY transaction with validation (Immutable Architecture)
+   * Validates sufficient balance before purchase
+   *
+   * KEY: Does NOT modify acquisition transactions - keeps them immutable
+   * Creates SELL transaction in source, BUY transaction in destination
+   */
+  const handleBuyWithValidation = async (
+    sourceTicker: string,
+    sourceQuantity: number,
+    destinationTicker: string,
+    destinationQuantity: number,
+    date: string,
+    tag?: TransactionTag
+  ) => {
+    try {
+      // Validate the transaction
+      const validation = validateBuyTransaction(
+        assets,
+        sourceTicker,
+        sourceQuantity,
+        destinationTicker,
+        date
+      );
+
+      if (!validation.valid) {
+        // Show warning popup
+        const proceed = window.confirm(
+          `⚠️ Validation Warning\n\n${validation.error}\n\nDo you want to proceed anyway?`
+        );
+
+        if (!proceed) {
+          return; // User cancelled
+        }
+      }
+
+      // Parse date in local timezone
+      const [year, month, day] = date.split('-').map(Number);
+      const localDate = new Date(year, month - 1, day);
+
+      // Fetch historical FX rates for the buy date
+      let historicalRates: Record<Currency, number> | undefined;
+      try {
+        historicalRates = await fetchHistoricalExchangeRatesForDate(localDate);
+      } catch (error) {
+        console.warn(`⚠️ Failed to fetch historical FX rates for ${date}:`, error);
+      }
+
+      // Calculate price per coin for destination asset
+      const pricePerDestinationCoin = sourceQuantity / destinationQuantity;
+
+      // Detect currencies
+      const sourceCurrency = detectAssetNativeCurrency(sourceTicker);
+      const destCurrency = detectAssetNativeCurrency(destinationTicker);
+
+      // P4: Generate transaction pair ID for linking BUY and SELL
+      const transactionPairId = Math.random().toString(36).substr(2, 9);
+      const buyTxId = Math.random().toString(36).substr(2, 9);
+      const sellTxId = Math.random().toString(36).substr(2, 9);
+
+      // P1 FIX: Calculate market-value-based cost basis BEFORE creating buyTx
+      // Get source asset's market price on transaction date
+      const sourceAsset = assets.find(a => a.ticker.toUpperCase() === sourceTicker.toUpperCase());
+
+      // Default values
+      let costBasisSpentUSD = sourceQuantity; // Fallback: assume 1:1 USD
+      let costBasisFIFOinUSD = 0; // FIFO cost basis converted to USD for P&L calculation
+      let sourceMarketPriceOnDate = 1.0; // Default for cash/stablecoins
+
+      // FIX: Declare pnlResult here so it's accessible in both if blocks below
+      let pnlResult: ReturnType<typeof calculateRealizedPnL> | null = null;
+
+      if (sourceAsset) {
+        // FIX 3: Validate we have the correct asset and log price
+        if (sourceAsset.ticker.toUpperCase() !== sourceTicker.toUpperCase()) {
+          throw new Error(`Asset mismatch: expected ${sourceTicker} but got ${sourceAsset.ticker}`);
+        }
+
+        console.log(`🔍 Source asset: ${sourceAsset.ticker}, currentPrice: $${sourceAsset.currentPrice}`);
+
+        // P1 FIX: Get market price of source asset on transaction date
+        sourceMarketPriceOnDate = getHistoricalPrice(sourceAsset, date);
+
+        // Market value = quantity * price on that date
+        costBasisSpentUSD = sourceQuantity * sourceMarketPriceOnDate;
+
+        console.log(`💰 BUY cost basis: ${sourceQuantity} ${sourceTicker} @ $${sourceMarketPriceOnDate} = $${costBasisSpentUSD} USD`);
+
+        // Calculate FIFO cost basis in USD for the SELL transaction's realized P&L
+        const sortedAcquisitionTxs = [...sourceAsset.transactions]
+          .filter(tx => tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME')
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+        let remainingToSpend = sourceQuantity;
+
+        // Calculate FIFO cost basis with FX conversion to USD
+        for (const tx of sortedAcquisitionTxs) {
+          if (remainingToSpend <= 0) break;
+
+          const qtyFromThisTx = Math.min(remainingToSpend, tx.quantity);
+          const costFromThisTxOriginal = (qtyFromThisTx / tx.quantity) * tx.totalCost;
+
+          // Convert to USD using transaction's historical FX rate
+          let costFromThisTxUSD = costFromThisTxOriginal;
+          if (tx.exchangeRateAtPurchase && tx.purchaseCurrency && tx.purchaseCurrency !== 'USD') {
+            costFromThisTxUSD = convertCurrencySync(
+              costFromThisTxOriginal,
+              tx.purchaseCurrency,
+              'USD',
+              tx.exchangeRateAtPurchase
+            );
+          }
+
+          remainingToSpend -= qtyFromThisTx;
+          costBasisFIFOinUSD += costFromThisTxUSD;
+        }
+
+        console.log(`📊 SELL realized P&L: Proceeds=$${costBasisSpentUSD} - FIFO Cost=$${costBasisFIFOinUSD} = $${costBasisSpentUSD - costBasisFIFOinUSD}`);
+      }
+
+      // P3 FIX: Calculate closed positions for the source asset being sold
+      let closedPositionsFromSell: any[] = [];
+      if (sourceAsset) {
+        pnlResult = calculateRealizedPnL(
+          sourceAsset,
+          sourceQuantity,
+          sourceMarketPriceOnDate, // Market price per coin on transaction date
+          'USD', // Proceeds currency
+          date,
+          displayCurrency,
+          historicalRates || exchangeRates,
+          tag,
+          sellTxId,
+          costBasisSpentUSD // USD value of what's being sold (market value)
+        );
+        closedPositionsFromSell = pnlResult.closedPositions;
+        console.log(`📊 Created ${closedPositionsFromSell.length} closed positions for BUY transaction`);
+      }
+
+      // Create BUY transaction for destination asset
+      // Store ORIGINAL source currency values for display (e.g., 70 CHF)
+      // The USD conversion is only used internally for P&L calculations
+      const buyTx: Transaction = {
+        id: buyTxId,
+        type: 'BUY',
+        quantity: destinationQuantity,
+        pricePerCoin: destinationQuantity > 0 ? sourceQuantity / destinationQuantity : 0, // Original: 70 CHF / 1 = 70 CHF per unit
+        date,
+        totalCost: sourceQuantity, // Original amount paid (e.g., 70 CHF)
+        tag: tag || 'DCA',
+        createdAt: new Date().toISOString(),
+        purchaseCurrency: sourceCurrency, // Original currency (CHF, not USD)
+        exchangeRateAtPurchase: historicalRates,
+        sourceTicker,
+        sourceQuantity,
+        linkedBuySellTransactionId: sellTxId, // P4: Link to SELL transaction
+        transactionPairId: transactionPairId // P4: Pair ID
+      };
+
+      // Create SELL transaction for source asset (already calculated avgPriceSpent above)
+      if (sourceAsset) {
+
+        // Create SELL transaction for source asset (disposal)
+        // For cash assets, pricePerCoin should always be 1.00 and totalCost = qty × price
+        const isCash = isCashAsset(sourceTicker);
+        const sellPricePerCoin = isCash ? 1.00 : sourceMarketPriceOnDate;
+        const sellTotalCost = isCash ? (sourceQuantity * 1.00) : costBasisFIFOinUSD;
+
+        const sellTx: Transaction = {
+          id: sellTxId,
+          type: 'SELL',
+          quantity: sourceQuantity,
+          pricePerCoin: sellPricePerCoin, // 1.00 for cash, market price for crypto/stocks
+          date,
+          totalCost: sellTotalCost, // For cash: qty × 1.00, for crypto: FIFO cost basis
+          proceeds: costBasisSpentUSD, // P1 FIX: Proceeds = market value in USD
+          proceedsCurrency: 'USD', // P1 FIX: Use USD as common currency
+          tag: tag || 'DCA',
+          createdAt: new Date().toISOString(),
+          destinationTicker,
+          destinationQuantity,
+          linkedBuySellTransactionId: buyTxId, // P4: Link to BUY transaction
+          transactionPairId: transactionPairId // P4: Pair ID
+        };
+
+        // Add SELL transaction to source (keep ALL existing transactions for display)
+        // Balance is calculated correctly below by summing acquisitions - disposals
+        const updatedSourceTxs = [...sourceAsset.transactions, sellTx];
+
+        // Recalculate source position: acquisitions - disposals
+        const acquisitions = updatedSourceTxs.filter(tx =>
+          tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+        );
+        const disposals = updatedSourceTxs.filter(tx =>
+          tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+        );
+
+        const totalAcquired = acquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+        const totalDisposed = disposals.reduce((sum, tx) => sum + tx.quantity, 0);
+        const newSourceQty = totalAcquired - totalDisposed;
+
+        const totalCostAcquired = acquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+        const totalCostDisposed = disposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+        const newSourceCost = totalCostAcquired - totalCostDisposed;
+
+        // Update source asset
+        updateActivePortfolio(portfolio => {
+          if (newSourceQty === 0) {
+            // If fully spent, remove the asset
+            return {
+              ...portfolio,
+              assets: portfolio.assets.filter(a => a.id !== sourceAsset.id),
+              closedPositions: [...(portfolio.closedPositions || []), ...closedPositionsFromSell] // P3 FIX
+            };
+          }
+
+          return {
+            ...portfolio,
+            assets: portfolio.assets.map(a =>
+              a.id === sourceAsset.id
+                ? {
+                    ...a,
+                    quantity: newSourceQty,
+                    transactions: updatedSourceTxs,
+                    totalCostBasis: newSourceCost,
+                    avgBuyPrice: newSourceQty > 0 ? newSourceCost / newSourceQty : 0,
+                    lastUpdated: new Date().toISOString()
+                  }
+                : a
+            ),
+            closedPositions: [...(portfolio.closedPositions || []), ...closedPositionsFromSell] // P3 FIX
+          };
+        });
+      }
+
+      // Add destination asset
+      const existingDest = assets.find(a => a.ticker.toUpperCase() === destinationTicker.toUpperCase());
+      if (existingDest) {
+        // P3 FIX: Update existing destination asset - just add BUY transaction and recalculate
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: portfolio.assets.map(a => {
+            if (a.id === existingDest.id) {
+              const updatedDestTxs = [...a.transactions, buyTx];
+
+              // Recalculate destination position
+              const destAcquisitions = updatedDestTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const destDisposals = updatedDestTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const destTotalAcquired = destAcquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const destTotalDisposed = destDisposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newDestQty = destTotalAcquired - destTotalDisposed;
+
+              const destTotalCostAcquired = destAcquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const destTotalCostDisposed = destDisposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newDestCost = destTotalCostAcquired - destTotalCostDisposed;
+
+              return {
+                ...a,
+                quantity: newDestQty,
+                transactions: updatedDestTxs,
+                totalCostBasis: newDestCost,
+                avgBuyPrice: newDestQty > 0 ? newDestCost / newDestQty : 0,
+                lastUpdated: new Date().toISOString()
+              };
+            }
+            return a;
+          })
+        }));
+
+        console.log(`✅ Bought ${destinationQuantity} ${destinationTicker} with ${sourceQuantity} ${sourceTicker}`);
+      } else {
+        // Create new destination asset directly with our buyTx (preserves linking)
+        const newDestAssetId = Math.random().toString(36).substr(2, 9);
+
+        // First create the asset with the properly linked buyTx
+        const newDestAsset: Asset = {
+          id: newDestAssetId,
+          ticker: destinationTicker,
+          name: undefined, // Will be fetched
+          quantity: destinationQuantity,
+          currentPrice: 0, // Will be fetched
+          lastUpdated: new Date().toISOString(),
+          sources: [],
+          isUpdating: true,
+          transactions: [buyTx], // Use our buyTx with linking intact!
+          avgBuyPrice: buyTx.pricePerCoin,
+          totalCostBasis: buyTx.totalCost,
+          assetType: undefined, // Will be auto-detected by API
+          currency: destCurrency
+        };
+
+        updateActivePortfolio(portfolio => ({
+          ...portfolio,
+          assets: [...portfolio.assets, newDestAsset]
+        }));
+
+        // Now fetch price and history for the new asset
+        try {
+          const result = await fetchCryptoPrice(destinationTicker);
+          updateActivePortfolio(portfolio => ({
+            ...portfolio,
+            assets: portfolio.assets.map(a => a.id === newDestAssetId ? {
+              ...a,
+              currentPrice: result.price,
+              sources: result.sources,
+              isUpdating: false,
+              name: result.name || result.symbol || a.name,
+              assetType: result.assetType || 'CRYPTO',
+              currency: result.currency || destCurrency
+            } : a)
+          }));
+
+          const historyData = await fetchAssetHistory(destinationTicker, result.price, result.symbol, result.assetType);
+          if (historyData) {
+            updateActivePortfolio(portfolio => ({
+              ...portfolio,
+              assets: portfolio.assets.map(a => a.id === newDestAssetId ? { ...a, priceHistory: historyData } : a)
+            }));
+          }
+        } catch (error: any) {
+          updateActivePortfolio(portfolio => ({
+            ...portfolio,
+            assets: portfolio.assets.map(a => a.id === newDestAssetId ? { ...a, isUpdating: false, error: error.message || 'Failed' } : a)
+          }));
+        }
+
+        console.log(`✅ Created new position: ${destinationQuantity} ${destinationTicker} with ${sourceQuantity} ${sourceTicker} (buyTxId: ${buyTx.id})`);
+      }
+    } catch (error) {
+      console.error('❌ Buy transaction failed:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * P3: Handle Portfolio Transfer (Immutable Architecture)
+   * Transfers an asset from current portfolio to another portfolio
+   * Preserves all cost basis and transaction history
+   *
+   * KEY: Does NOT modify acquisition transactions - keeps them immutable
+   * Creates TRANSFER transaction in source, copies acquisition history to destination
+   */
+  const handlePortfolioTransfer = (
+    asset: Asset,
+    quantity: number,
+    date: string,
+    destinationPortfolioId: string,
+    tag?: TransactionTag
+  ) => {
+    try {
+      const transferTxId = Math.random().toString(36).substr(2, 9);
+      const destinationPortfolio = portfolios.find(p => p.id === destinationPortfolioId);
+
+      if (!destinationPortfolio) {
+        throw new Error('Destination portfolio not found');
+      }
+
+      // P3 FIX: Use FIFO to calculate cost basis but DON'T modify acquisition transactions
+      const sortedAcquisitionTxs = [...asset.transactions]
+        .filter(tx => tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME')
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      let remainingToTransfer = quantity;
+      let totalCostBasisTransferred = 0;
+      const transferredTxCopies: Transaction[] = [];
+
+      // Calculate cost basis using FIFO (without modifying transactions)
+      for (const tx of sortedAcquisitionTxs) {
+        if (remainingToTransfer <= 0) break;
+
+        const qtyFromThisTx = Math.min(remainingToTransfer, tx.quantity);
+        const costFromThisTx = (qtyFromThisTx / tx.quantity) * tx.totalCost;
+
+        // Create a copy of the transaction for destination portfolio history
+        // P3: Mark with transferredFrom to prevent deletion in destination
+        transferredTxCopies.push({
+          ...tx,
+          id: Math.random().toString(36).substr(2, 9), // New ID for destination
+          quantity: qtyFromThisTx,
+          totalCost: costFromThisTx,
+          pricePerCoin: tx.pricePerCoin,
+          transferredFrom: activePortfolio.id // Mark as transferred from source portfolio
+        });
+
+        remainingToTransfer -= qtyFromThisTx;
+        totalCostBasisTransferred += costFromThisTx;
+      }
+
+      // Calculate average price for transferred quantity
+      const avgPriceTransferred = quantity > 0 ? totalCostBasisTransferred / quantity : 0;
+
+      // Create TRANSFER transaction in source portfolio (shows cost basis, but P&L = 0)
+      const transferTx: Transaction = {
+        id: transferTxId,
+        type: 'TRANSFER',
+        quantity,
+        pricePerCoin: avgPriceTransferred,
+        date,
+        totalCost: totalCostBasisTransferred,
+        tag: tag || 'Strategic',
+        createdAt: new Date().toISOString(),
+        destinationPortfolioId: destinationPortfolioId,
+        linkedTransactionId: transferTxId
+      };
+
+      // Add transfer transaction to source (keep all existing transactions intact)
+      const updatedSourceTxs = [...asset.transactions, transferTx];
+
+      // Recalculate source position: acquisitions - (sells + withdrawals + transfers)
+      const sourceAcquisitions = updatedSourceTxs.filter(tx =>
+        tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+      );
+      const sourceDisposals = updatedSourceTxs.filter(tx =>
+        tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+      );
+
+      const totalAcquired = sourceAcquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+      const totalDisposed = sourceDisposals.reduce((sum, tx) => sum + tx.quantity, 0);
+      const newSourceQty = totalAcquired - totalDisposed;
+
+      // Cost basis calculation using FIFO
+      const totalCostAcquired = sourceAcquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+      const totalCostDisposed = sourceDisposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+      const newSourceCost = totalCostAcquired - totalCostDisposed;
+
+      // Update source portfolio
+      updateActivePortfolio(portfolio => {
+        if (newSourceQty === 0) {
+          // If fully transferred, remove asset from source
+          return {
+            ...portfolio,
+            assets: portfolio.assets.filter(a => a.id !== asset.id)
+          };
+        } else {
+          // Update asset in source with new position
+          return {
+            ...portfolio,
+            assets: portfolio.assets.map(a =>
+              a.id === asset.id
+                ? {
+                    ...a,
+                    quantity: newSourceQty,
+                    transactions: updatedSourceTxs,
+                    totalCostBasis: newSourceCost,
+                    avgBuyPrice: newSourceQty > 0 ? newSourceCost / newSourceQty : 0,
+                    lastUpdated: new Date().toISOString()
+                  }
+                : a
+            )
+          };
+        }
+      });
+
+      // Add to destination portfolio
+      setPortfolios(prevPortfolios =>
+        prevPortfolios.map(p => {
+          if (p.id === destinationPortfolioId) {
+            const existingAsset = p.assets.find(a => a.ticker === asset.ticker);
+
+            if (existingAsset) {
+              // Merge with existing asset - add transaction copies to history
+              const updatedDestTxs = [...existingAsset.transactions, ...transferredTxCopies];
+
+              // Recalculate destination position
+              const destAcquisitions = updatedDestTxs.filter(tx =>
+                tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+              );
+              const destDisposals = updatedDestTxs.filter(tx =>
+                tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER'
+              );
+
+              const destTotalAcquired = destAcquisitions.reduce((sum, tx) => sum + tx.quantity, 0);
+              const destTotalDisposed = destDisposals.reduce((sum, tx) => sum + tx.quantity, 0);
+              const newDestQty = destTotalAcquired - destTotalDisposed;
+
+              const destTotalCostAcquired = destAcquisitions.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const destTotalCostDisposed = destDisposals.reduce((sum, tx) => sum + tx.totalCost, 0);
+              const newDestCost = destTotalCostAcquired - destTotalCostDisposed;
+
+              return {
+                ...p,
+                assets: p.assets.map(a =>
+                  a.id === existingAsset.id
+                    ? {
+                        ...a,
+                        quantity: newDestQty,
+                        transactions: updatedDestTxs,
+                        totalCostBasis: newDestCost,
+                        avgBuyPrice: newDestQty > 0 ? newDestCost / newDestQty : 0,
+                        lastUpdated: new Date().toISOString()
+                      }
+                    : a
+                )
+              };
+            } else {
+              // Create new asset in destination with transaction copies
+              const newAsset: Asset = {
+                id: Math.random().toString(36).substr(2, 9),
+                ticker: asset.ticker,
+                name: asset.name,
+                quantity,
+                currentPrice: asset.currentPrice,
+                lastUpdated: new Date().toISOString(),
+                sources: asset.sources,
+                isUpdating: false,
+                transactions: transferredTxCopies,
+                avgBuyPrice: totalCostBasisTransferred / quantity,
+                totalCostBasis: totalCostBasisTransferred,
+                coinGeckoId: asset.coinGeckoId,
+                assetType: asset.assetType,
+                currency: asset.currency
+              };
+
+              return {
+                ...p,
+                assets: [...p.assets, newAsset]
+              };
+            }
+          }
+          return p;
+        })
+      );
+
+      console.log(`✅ Transferred ${quantity} ${asset.ticker} to ${destinationPortfolio.name}`);
+      console.log(`   Cost basis transferred: ${displayCurrency} ${totalCostBasisTransferred.toFixed(2)}`);
+    } catch (error) {
+      console.error('❌ Portfolio transfer failed:', error);
       throw error;
     }
   };
@@ -1691,7 +3107,20 @@ const App: React.FC = () => {
           historicalRates={historicalRates}
         />
 
-        <AddAssetForm onAdd={handleAddAsset} isGlobalLoading={isLoading} />
+        {/* P3: New Transaction Button - Primary Entry Point */}
+        <div className="mb-6">
+          <button
+            onClick={() => setIsTransactionModalOpen(true)}
+            className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl transition-all shadow-xl hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <Plus size={24} strokeWidth={2.5} />
+            New Transaction
+          </button>
+          <p className="text-center text-slate-400 text-sm mt-2">
+            Deposit, Buy, Withdraw, or Record Income
+          </p>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {assets.map(asset => (
             <AssetCard
@@ -1744,41 +3173,24 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* P2: Undo Notification */}
-      {undoNotification?.visible && (
-        <div className="fixed bottom-8 right-8 z-50 animate-in slide-in-from-bottom-5">
-          <div className="bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-4 min-w-[400px]">
-            <div className="flex items-start gap-3">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-emerald-400 font-bold">✓</span>
-                  <h3 className="text-white font-semibold">Transaction Completed</h3>
-                </div>
-                <p className="text-slate-300 text-sm">
-                  Sold {undoNotification.quantity.toLocaleString('en-US', { maximumFractionDigits: 8 })} {undoNotification.ticker} for {undoNotification.proceedsCurrency}
-                </p>
-                <p className="text-slate-500 text-xs mt-1">
-                  Auto-dismissing in {undoNotification.countdown}s
-                </p>
-              </div>
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={handleUndoSell}
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  Undo
-                </button>
-                <button
-                  onClick={() => setUndoNotification(null)}
-                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium rounded-lg transition-colors"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* P3: Transaction Modal */}
+      {isTransactionModalOpen && (
+        <TransactionModal
+          onClose={() => setIsTransactionModalOpen(false)}
+          onDeposit={handleDeposit}
+          onBuy={handleBuyWithValidation}
+          onSell={handleSellAsset}
+          onWithdraw={handleWithdrawal}
+          onTransfer={handlePortfolioTransfer}
+          onIncome={handleIncome}
+          assets={assets}
+          portfolios={portfolios}
+          currentPortfolioId={activePortfolioId}
+          displayCurrency={displayCurrency}
+          exchangeRates={exchangeRates}
+        />
       )}
+
     </div>
   );
 };

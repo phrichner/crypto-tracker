@@ -253,6 +253,7 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
               id="quantity"
               type="number"
               step="any"
+              min="0"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               placeholder="0.00"
@@ -272,6 +273,7 @@ export const AddAssetForm: React.FC<AddAssetFormProps> = ({ onAdd, isGlobalLoadi
                 id="totalPaid"
                 type="number"
                 step="any"
+                min="0"
                 value={totalPaid}
                 onChange={(e) => setTotalPaid(e.target.value)}
                 placeholder="1000.00"

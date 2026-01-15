@@ -40,9 +40,11 @@ const ASSET_TYPE_CONFIG = {
 const calculateFxAdjustedPnL = (
   tx: any,
   assetCurrency: Currency,
+  assetTicker: string,
   currentPrice: number,
   closedPositions?: any[]
 ): { pnl: number; costBasis: number; currentValue: number } => {
+
   // P2 FIX: For SELL transactions, P&L comes from closed positions
   if (tx.type === 'SELL') {
     // Find the closed position(s) for this sell transaction
@@ -59,7 +61,56 @@ const calculateFxAdjustedPnL = (
     };
   }
 
+  // P3: For WITHDRAWAL and TRANSFER transactions, P&L = 0
+  if (tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER') {
+    return {
+      pnl: 0, // No profit/loss on withdrawals or transfers
+      costBasis: tx.totalCost || 0,
+      currentValue: tx.totalCost || 0 // Value equals cost basis (no gain/loss)
+    };
+  }
+
+  // P3: For DEPOSIT and INCOME transactions (acquisitions)
+  if (tx.type === 'DEPOSIT' || tx.type === 'INCOME') {
+    // P3 FIX: For FIAT currencies, P&L should be FX-based, not price appreciation
+    // IMPORTANT: Only check assetTicker (the actual asset), NOT assetCurrency (used for formatting)
+    const isFiatCurrency = ['USD', 'CHF', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'].includes(assetTicker.toUpperCase());
+
+    if (isFiatCurrency) {
+      // For FIAT, P&L = 0 on the transaction level
+      // FX gains/losses are tracked at portfolio level through exchangeRates
+      return {
+        pnl: 0,
+        costBasis: tx.totalCost,
+        currentValue: tx.totalCost // No price appreciation for FIAT
+      };
+    }
+
+    // For non-FIAT assets (crypto, stocks)
+    const currentValue = tx.quantity * currentPrice;
+    const costBasis = tx.totalCost;
+    const pnl = currentValue - costBasis;
+
+    return {
+      pnl,
+      costBasis,
+      currentValue
+    };
+  }
+
   // For BUY transactions
+  // P3 FIX: For FIAT currencies (buying CHF with USD, etc), P&L should be 0
+  // IMPORTANT: Only check assetTicker, NOT assetCurrency (stocks can be denominated in CHF but aren't FIAT)
+  const isFiatAsset = ['USD', 'CHF', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'].includes(assetTicker.toUpperCase());
+
+  if (isFiatAsset) {
+    return {
+      pnl: 0,
+      costBasis: tx.totalCost,
+      currentValue: tx.totalCost // No price appreciation for FIAT
+    };
+  }
+
   const currentValue = tx.quantity * currentPrice;
 
   // If transaction has historical FX rates, use them for accurate conversion
@@ -110,21 +161,52 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
   // Stablecoins like USDT, USDC, DAI are not valid ISO currency codes
   const displayCurrency: Currency = ['USDT', 'USDC', 'DAI', 'BTC', 'ETH', 'SOL'].includes(assetCurrency as string) ? 'USD' : assetCurrency;
 
-  // P1.1B CHANGE: Calculate FX-adjusted total P&L
-  // Calculate aggregate FX-adjusted values
-  let totalFxAdjustedCost = 0;
-  let totalCurrentValue = 0;
+  // P3 FIX: Calculate unrealized P&L from CURRENT POSITION ONLY
+  // Don't sum all transactions - only calculate P&L on what you currently hold
+  // WITHDRAWAL, TRANSFER, SELL transactions have already removed quantity/cost from the position
 
-  asset.transactions.forEach(tx => {
-    const { costBasis, currentValue } = calculateFxAdjustedPnL(tx, assetCurrency, asset.currentPrice, closedPositions);
-    totalFxAdjustedCost += costBasis;
-    totalCurrentValue += currentValue;
-  });
+  // P3 FIX: For FIAT currencies, P&L should always be 0 (no price appreciation)
+  const isFiatAsset = ['USD', 'CHF', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'].includes(asset.ticker.toUpperCase());
 
-  const currentTotalValue = totalCurrentValue;
-  const totalCost = totalFxAdjustedCost;
-  const profitLoss = currentTotalValue - totalCost;
-  const profitLossPercent = totalCost > 0 ? (profitLoss / totalCost) * 100 : 0;
+  const currentTotalValue = asset.quantity * asset.currentPrice;
+
+  // P4 FIX: Calculate cost basis by iterating transactions with historical FX rates
+  // Convert each transaction's cost using its original currency and historical rate
+  let totalCost = 0;
+  for (const tx of asset.transactions) {
+    if (tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME') {
+      // Acquisition transactions - add to cost basis
+      if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+        // Use historical rate from transaction to convert to asset's display currency
+        const costInAssetCurrency = convertCurrencySync(
+          tx.totalCost,
+          tx.purchaseCurrency,
+          assetCurrency,
+          tx.exchangeRateAtPurchase
+        );
+        totalCost += costInAssetCurrency;
+      } else {
+        // Fallback: use cost as-is (old transactions without FX data)
+        totalCost += tx.totalCost;
+      }
+    } else if (tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER') {
+      // Disposal transactions - subtract from cost basis
+      if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+        const costInAssetCurrency = convertCurrencySync(
+          tx.totalCost,
+          tx.purchaseCurrency,
+          assetCurrency,
+          tx.exchangeRateAtPurchase
+        );
+        totalCost -= costInAssetCurrency;
+      } else {
+        totalCost -= tx.totalCost;
+      }
+    }
+  }
+
+  const profitLoss = isFiatAsset ? 0 : (currentTotalValue - totalCost);
+  const profitLossPercent = isFiatAsset ? 0 : (totalCost > 0 ? (profitLoss / totalCost) * 100 : 0);
 
   const isProfit = profitLoss >= 0;
   const hasHistory = asset.priceHistory && asset.priceHistory.length > 0;
@@ -293,7 +375,7 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
                 <tbody className="divide-y divide-slate-700/50 text-slate-300">
                   {asset.transactions.map((tx) => {
                     // P1.1B CHANGE: Use FX-adjusted P&L calculation
-                    const { pnl: txPnL } = calculateFxAdjustedPnL(tx, assetCurrency, asset.currentPrice, closedPositions);
+                    const { pnl: txPnL } = calculateFxAdjustedPnL(tx, assetCurrency, asset.ticker, asset.currentPrice, closedPositions);
                     
                     const isEditing = editingTxId === tx.id;
                     const txTag = tx.tag || 'DCA';

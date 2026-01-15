@@ -1,7 +1,34 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npm run build:*)",
+      "Bash(node:*)",
+      "Bash(npm run dev:*)",
+      "Bash(taskkill:*)",
+      "Bash(Get-Process node)",
+      "Bash(Stop-Process -Force)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(Where-Object { $_MainWindowTitle -like \"*vite*\" -or $_CommandLine -like \"*vite*\" })",
+      "Bash(Select-Object Id, ProcessName, @{Name=\"CommandLine\")",
+      "Bash(Expression={$_CommandLine}})",
+      "Bash(Format-List)",
+      "Bash(tasklist:*)",
+      "Bash(powershell \"Get-Process node | Stop-Process -Force\")",
+      "Bash(Select-Object -First 10)",
+      "Bash(dir:*)",
+      "Bash(powershell \"Stop-Process -Id 83012 -Force; Stop-Process -Id 98864 -Force\")",
+      "Bash(timeout /t 3 /nobreak)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(timeout 10 bash:*)",
+      "Bash(grep:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nLinked BUY transaction deletion with automatic reversal\n\n- BUY transactions now properly link to their SELL counterpart\n- Deleting from either side \\(BUY or SELL\\) reverses both legs\n- Warning popup explains what will be deleted\n- Closed positions are properly cleaned up on reversal\n- Fixed P&L calculation to use correct source currency \\(CHF, EUR, etc.\\)\n- Fixed detectAssetNativeCurrency to recognize currency tickers\n- Removed undo notification feature \\(user confirms via popup\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push)"
     ]
   }
 }

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Asset, Currency, TransactionTag } from '../types';
-import { X, DollarSign, Calendar, Tag, AlertTriangle, TrendingDown } from 'lucide-react';
+import { X, DollarSign, Calendar, AlertTriangle, TrendingDown } from 'lucide-react';
 import { detectAssetNativeCurrency } from '../services/portfolioService';
 import { convertCurrencySync } from '../services/currencyService';
+import { TagSelector } from './TagSelector';
 
 interface SellModalProps {
   asset: Asset;
@@ -22,8 +23,6 @@ const CRYPTO_PROCEEDS_OPTIONS = [
   { value: 'SOL', label: 'SOL (Solana)', category: 'Major' },
 ];
 
-const SELL_TAGS: TransactionTag[] = ['Profit-Taking', 'Rebalance', 'Emergency', 'Strategic'];
-
 export const SellModal: React.FC<SellModalProps> = ({
   asset,
   onSell,
@@ -42,10 +41,16 @@ export const SellModal: React.FC<SellModalProps> = ({
   const [tag, setTag] = useState<TransactionTag>('Profit-Taking');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Determine if this is a crypto asset
-  const isCryptoAsset = asset.assetType === 'CRYPTO' ||
-                        !asset.assetType ||
-                        !asset.ticker.includes('.');
+  // P3 FIX: Determine if this is a stock asset FIRST (stocks have dots or stock asset type)
+  const isStockAsset = (asset.assetType && (asset.assetType.startsWith('STOCK_') || asset.assetType === 'ETF')) ||
+                       asset.ticker.includes('.');
+
+  // Determine if this is a FIAT asset
+  const isFiatAsset = asset.assetType === 'CASH' ||
+                      ['USD', 'CHF', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'].includes(asset.ticker.toUpperCase());
+
+  // Determine if this is a crypto asset (everything else)
+  const isCryptoAsset = !isStockAsset && !isFiatAsset;
 
   // P2: Determine if proceeds currency is a major crypto (not a stablecoin or fiat)
   const isCryptoToCrypto = isCryptoAsset && ['BTC', 'ETH', 'SOL'].includes(proceedsCurrency);
@@ -55,12 +60,12 @@ export const SellModal: React.FC<SellModalProps> = ({
     if (isCryptoAsset) {
       // Default to USDT for crypto
       setProceedsCurrency('USDT');
-    } else {
-      // For stocks, use native currency
+    } else if (isStockAsset || isFiatAsset) {
+      // For stocks and FIAT, use native currency
       const nativeCurrency = detectAssetNativeCurrency(asset.ticker);
       setProceedsCurrency(nativeCurrency);
     }
-  }, [isCryptoAsset, asset.ticker]);
+  }, [isCryptoAsset, isStockAsset, isFiatAsset, asset.ticker]);
 
   // Calculate preview values
   const qtyNum = parseFloat(quantity) || 0;
@@ -214,6 +219,21 @@ export const SellModal: React.FC<SellModalProps> = ({
             </div>
           )}
 
+          {/* P3: Proceeds Currency for Stocks - FIAT only, read-only */}
+          {isStockAsset && (
+            <div>
+              <label className="block text-sm text-slate-300 mb-2">
+                Proceeds Currency
+              </label>
+              <div className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-3 text-slate-400">
+                {proceedsCurrency}
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Stocks must be sold for FIAT currency ({detectAssetNativeCurrency(asset.ticker)})
+              </p>
+            </div>
+          )}
+
           {/* P2: Conditionally show Price or Quantity Received */}
           {isCryptoToCrypto ? (
             /* Quantity Received (for crypto-to-crypto) */
@@ -278,21 +298,11 @@ export const SellModal: React.FC<SellModalProps> = ({
           </div>
 
           {/* Tag */}
-          <div>
-            <label className="block text-sm text-slate-300 mb-2">Transaction Tag *</label>
-            <div className="relative">
-              <Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
-              <select
-                value={tag}
-                onChange={(e) => setTag(e.target.value as TransactionTag)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-10 pr-4 py-3 text-white focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none"
-              >
-                {SELL_TAGS.map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+          <TagSelector
+            value={tag}
+            onChange={setTag}
+            transactionType="SELL"
+          />
 
           {/* Preview */}
           <div className="bg-slate-900/50 rounded-lg p-4 space-y-2 border border-slate-700">

@@ -18,10 +18,16 @@ export type AssetType = 'CRYPTO' | 'STOCK_US' | 'STOCK_CH' | 'STOCK_DE' | 'ETF' 
 // Supported currencies
 export type Currency = 'USD' | 'CHF' | 'EUR' | 'GBP' | 'JPY' | 'CAD' | 'AUD';
 
+// P3: Cash Flow Management - Extended transaction types
+export type TransactionType = 'BUY' | 'SELL' | 'DEPOSIT' | 'WITHDRAWAL' | 'TRANSFER' | 'INCOME';
+
+export type IncomeType = 'dividend' | 'staking' | 'airdrop' | 'interest';
+
 // P1.1B CHANGE: Added purchaseCurrency and exchangeRateAtPurchase for FX-adjusted performance
+// P3 CHANGE: Extended transaction types to include DEPOSIT, WITHDRAWAL, INCOME
 export interface Transaction {
   id: string;
-  type: 'BUY' | 'SELL';
+  type: TransactionType;
   quantity: number;
   pricePerCoin: number;
   date: string;
@@ -34,6 +40,30 @@ export interface Transaction {
 
   // P2: Trading Lifecycle - For SELL transactions only
   proceedsCurrency?: string; // For crypto sells: which asset/currency did you sell to? (e.g., 'USDT', 'ETH', 'BTC')
+
+  // P3: Cash Flow Management - DEPOSIT specific
+  costBasis?: number; // User-provided cost basis for crypto/stock deposits
+  depositSource?: string; // "Bank Transfer", "Coinbase", etc.
+
+  // P3: WITHDRAWAL specific
+  withdrawalDestination?: string; // "Bank Account", "Hardware Wallet", etc.
+
+  // P3: TRANSFER specific (portfolio to portfolio)
+  destinationPortfolioId?: string; // ID of destination portfolio for TRANSFER transactions
+  linkedTransactionId?: string; // Link to corresponding transaction in destination portfolio
+  transferredFrom?: string; // P3: Portfolio ID this transaction was transferred FROM (marks copied transactions in destination)
+
+  // P3: INCOME specific
+  incomeType?: IncomeType; // Type of income: dividend, staking, airdrop, interest
+  incomeSource?: string; // Source of income (e.g., "Coinbase Staking", "AAPL Dividend")
+
+  // P3: BUY specific - source of funds
+  sourceTicker?: string; // What you paid with (e.g., 'USD', 'BTC', 'ETH')
+  sourceQuantity?: number; // How much you paid
+
+  // P4: BUY/SELL transaction linking (for buy asset with another asset transactions)
+  linkedBuySellTransactionId?: string; // Links BUY transaction to corresponding SELL transaction in source asset (and vice versa)
+  transactionPairId?: string; // Unique ID shared by both BUY and SELL in a purchase transaction
 }
 
 export interface Asset {

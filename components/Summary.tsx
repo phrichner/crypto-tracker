@@ -156,32 +156,45 @@ export const Summary: React.FC<SummaryProps> = ({
       const assetValue = asset.quantity * asset.currentPrice;
       const valueInDisplay = convertToDisplayCurrency(assetValue, assetCurrency, displayCurrency);
 
-      // P1.1B CHANGE: Cost basis - convert each transaction using its HISTORICAL rates
-      // P2: Only include BUY transactions for cost basis (exclude SELL transactions)
-      let costBasisInDisplay = 0;
-
+      // P4 FIX: Calculate cost basis by iterating through transactions with historical FX rates
+      // This ensures each transaction's cost is converted using its ORIGINAL currency and historical rate
+      let assetCostBasisInDisplay = 0;
       for (const tx of asset.transactions) {
-        // Skip SELL transactions - they don't contribute to cost basis of open positions
-        if (tx.type === 'SELL') continue;
-
-        if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
-          // Convert cost from purchase currency directly to display currency using historical rates
-          const costInDisplay = convertCurrencySync(
-            tx.totalCost,
-            tx.purchaseCurrency,
-            displayCurrency,
-            tx.exchangeRateAtPurchase
-          );
-          costBasisInDisplay += costInDisplay;
-        } else {
-          // Fallback: convert using current rates (backward compatible)
-          const costInDisplay = convertToDisplayCurrency(tx.totalCost, assetCurrency, displayCurrency);
-          costBasisInDisplay += costInDisplay;
+        if (tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME') {
+          // Acquisition transactions - add to cost basis
+          if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+            // Use historical rate from transaction
+            const costInDisplay = convertCurrencySync(
+              tx.totalCost,
+              tx.purchaseCurrency,
+              displayCurrency,
+              tx.exchangeRateAtPurchase
+            );
+            assetCostBasisInDisplay += costInDisplay;
+          } else {
+            // Fallback: convert using current rate (for old transactions without historical data)
+            const costInDisplay = convertToDisplayCurrency(tx.totalCost, assetCurrency, displayCurrency);
+            assetCostBasisInDisplay += costInDisplay;
+          }
+        } else if (tx.type === 'SELL' || tx.type === 'WITHDRAWAL' || tx.type === 'TRANSFER') {
+          // Disposal transactions - subtract from cost basis
+          if (tx.exchangeRateAtPurchase && tx.purchaseCurrency) {
+            const costInDisplay = convertCurrencySync(
+              tx.totalCost,
+              tx.purchaseCurrency,
+              displayCurrency,
+              tx.exchangeRateAtPurchase
+            );
+            assetCostBasisInDisplay -= costInDisplay;
+          } else {
+            const costInDisplay = convertToDisplayCurrency(tx.totalCost, assetCurrency, displayCurrency);
+            assetCostBasisInDisplay -= costInDisplay;
+          }
         }
       }
 
       totalValue += valueInDisplay;
-      totalCostBasis += costBasisInDisplay;
+      totalCostBasis += assetCostBasisInDisplay;
     }
 
     const pnl = totalValue - totalCostBasis;

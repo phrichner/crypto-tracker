@@ -64,11 +64,13 @@ export const TagAnalytics: React.FC<TagAnalyticsProps> = ({ assets, displayCurre
     for (const asset of assets) {
       const assetCurrency = asset.currency || detectCurrencyFromTicker(asset.ticker);
 
-      // P2: Only include BUY transactions (exclude SELL transactions from strategy performance)
-      const buyTransactions = asset.transactions.filter(tx => tx.type === 'BUY');
+      // P3: Include BUY, DEPOSIT, and INCOME transactions in strategy performance
+      const acquisitionTransactions = asset.transactions.filter(tx =>
+        tx.type === 'BUY' || tx.type === 'DEPOSIT' || tx.type === 'INCOME'
+      );
 
-      // Iterate through all BUY transactions in each asset
-      for (const tx of buyTransactions) {
+      // Iterate through all acquisition transactions in each asset
+      for (const tx of acquisitionTransactions) {
         const tag = tx.tag || 'Untagged';
 
         // P1.1B CHANGE: Calculate FX-adjusted cost basis

@@ -842,13 +842,15 @@ const App: React.FC = () => {
       }
 
       // All validations passed - show confirmation
+      // Use asset's currency or purchaseCurrency from transaction for correct display
+      const transferCurrency = txToDelete.purchaseCurrency || asset.currency || 'USD';
       const confirmed = window.confirm(
         `⚠️ Delete Transfer Transaction?\n\n` +
         `This will:\n` +
         `  • Restore ${txToDelete.quantity.toLocaleString()} ${asset.ticker} to this portfolio\n` +
         `  • Remove ${txToDelete.quantity.toLocaleString()} ${asset.ticker} from "${destinationPortfolio.name}"\n\n` +
         `Date: ${new Date(txToDelete.date).toLocaleDateString()}\n` +
-        `Cost Basis: ${txToDelete.totalCost.toLocaleString()} ${activePortfolio.settings?.displayCurrency || 'USD'}\n\n` +
+        `Cost Basis: ${txToDelete.totalCost.toLocaleString()} ${transferCurrency}\n\n` +
         `Do you want to continue?`
       );
 
@@ -2696,7 +2698,8 @@ const App: React.FC = () => {
           quantity: qtyFromThisTx,
           totalCost: costFromThisTx,
           pricePerCoin: tx.pricePerCoin,
-          transferredFrom: activePortfolio.id // Mark as transferred from source portfolio
+          transferredFrom: activePortfolio.id, // Mark as transferred from source portfolio
+          tag: tag || tx.tag // Use user-selected tag, fallback to original tag
         });
 
         remainingToTransfer -= qtyFromThisTx;

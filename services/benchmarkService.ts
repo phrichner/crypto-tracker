@@ -3,6 +3,12 @@
  *
  * Fetches and caches benchmark index data from Yahoo Finance for portfolio comparison.
  * Supports SMI, S&P 500, MSCI World, Bitcoin, and custom tickers.
+ *
+ * For crypto benchmarks (BTC-USD, ETH-USD, etc.):
+ * - Short timeframes (24H, 1W): Uses hourly data for smoother curves
+ * - Longer timeframes (1M, ALL): Uses daily data
+ *
+ * For stocks/indices: Always uses daily data (hourly not available)
  */
 
 import {
@@ -14,11 +20,18 @@ import {
   DEFAULT_BENCHMARKS
 } from '../types';
 
-// Cache TTL: 24 hours in milliseconds
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// Time range type for benchmark fetching
+export type BenchmarkTimeRange = '24H' | '1W' | '1M' | '3M' | '1Y' | 'ALL' | 'CUSTOM';
 
-// LocalStorage key prefix for benchmark data
+// Cache TTL: 1 hour for short timeframes, 24 hours for longer
+const CACHE_TTL_SHORT_MS = 1 * 60 * 60 * 1000;  // 1 hour
+const CACHE_TTL_LONG_MS = 24 * 60 * 60 * 1000;  // 24 hours
+
+// LocalStorage key prefix for benchmark data (includes timeRange)
 const BENCHMARK_CACHE_PREFIX = 'benchmark_data_';
+
+// Number of interpolated points for smooth chart rendering
+const INTERPOLATION_POINTS = 150;
 
 // CORS proxies (same as geminiService)
 const CORS_PROXIES = [
@@ -39,25 +52,91 @@ const getCurrencyForTicker = (ticker: string): string => {
 };
 
 /**
+ * Check if a ticker is a crypto pair (supports hourly data)
+ */
+const isCryptoTicker = (ticker: string): boolean => {
+  const upper = ticker.toUpperCase();
+  // Common crypto pairs on Yahoo Finance end with -USD, -EUR, -GBP, etc.
+  return upper.includes('-USD') || upper.includes('-EUR') || upper.includes('-GBP') ||
+         upper.includes('-USDT') || upper.includes('-BTC') || upper.includes('-ETH');
+};
+
+/**
+ * Get Yahoo Finance API parameters based on time range and ticker type
+ */
+const getYahooParams = (ticker: string, timeRange: BenchmarkTimeRange): { range: string; interval: string } => {
+  const isCrypto = isCryptoTicker(ticker);
+
+  switch (timeRange) {
+    case '24H':
+      // For 24H: crypto gets hourly, stocks get daily (closest available)
+      return isCrypto
+        ? { range: '1d', interval: '15m' }  // 15min intervals for 24h gives ~96 points
+        : { range: '5d', interval: '1d' };  // Stocks: get 5 days daily to have context
+
+    case '1W':
+      // For 1W: crypto gets hourly (up to 7 days available), stocks get daily
+      return isCrypto
+        ? { range: '7d', interval: '1h' }   // Hourly for full week
+        : { range: '1mo', interval: '1d' }; // Stocks: 1 month daily for context
+
+    case '1M':
+      // For 1M: daily data for all
+      return { range: '1mo', interval: '1d' };
+
+    case '3M':
+      return { range: '3mo', interval: '1d' };
+
+    case '1Y':
+      return { range: '1y', interval: '1d' };
+
+    case 'ALL':
+    case 'CUSTOM':
+    default:
+      // For ALL/CUSTOM: fetch max data with daily interval
+      return { range: '5y', interval: '1d' };
+  }
+};
+
+/**
+ * Get cache key including timeRange for proper cache separation
+ */
+const getCacheKey = (ticker: string, timeRange: BenchmarkTimeRange): string => {
+  return `${BENCHMARK_CACHE_PREFIX}${ticker}_${timeRange}`;
+};
+
+/**
+ * Get appropriate cache TTL based on time range
+ */
+const getCacheTTL = (timeRange: BenchmarkTimeRange): number => {
+  // Short timeframes need fresher data
+  if (timeRange === '24H' || timeRange === '1W') {
+    return CACHE_TTL_SHORT_MS;
+  }
+  return CACHE_TTL_LONG_MS;
+};
+
+/**
  * Load cached benchmark data from localStorage
  */
-const loadCachedBenchmark = (ticker: string): BenchmarkData | null => {
+const loadCachedBenchmark = (ticker: string, timeRange: BenchmarkTimeRange): BenchmarkData | null => {
   try {
-    const key = `${BENCHMARK_CACHE_PREFIX}${ticker}`;
+    const key = getCacheKey(ticker, timeRange);
     const cached = localStorage.getItem(key);
 
     if (!cached) return null;
 
     const data: BenchmarkData = JSON.parse(cached);
 
-    // Check if cache is still valid (within TTL)
+    // Check if cache is still valid (within TTL based on timeRange)
     const now = Date.now();
-    if (now - data.lastUpdated > CACHE_TTL_MS) {
-      console.log(`📊 Benchmark cache expired for ${ticker}`);
+    const ttl = getCacheTTL(timeRange);
+    if (now - data.lastUpdated > ttl) {
+      console.log(`📊 Benchmark cache expired for ${ticker} (${timeRange})`);
       return null;  // Cache expired, but still return it as fallback is handled elsewhere
     }
 
-    console.log(`📊 Loaded cached benchmark data for ${ticker} (${data.priceHistory.length} points)`);
+    console.log(`📊 Loaded cached benchmark data for ${ticker} (${timeRange}, ${data.priceHistory.length} points)`);
     return data;
   } catch (error) {
     console.warn(`⚠️ Failed to load cached benchmark for ${ticker}:`, error);
@@ -68,11 +147,11 @@ const loadCachedBenchmark = (ticker: string): BenchmarkData | null => {
 /**
  * Save benchmark data to localStorage cache
  */
-const saveBenchmarkCache = (data: BenchmarkData): void => {
+const saveBenchmarkCache = (data: BenchmarkData, timeRange: BenchmarkTimeRange): void => {
   try {
-    const key = `${BENCHMARK_CACHE_PREFIX}${data.ticker}`;
+    const key = getCacheKey(data.ticker, timeRange);
     localStorage.setItem(key, JSON.stringify(data));
-    console.log(`💾 Cached benchmark data for ${data.ticker}`);
+    console.log(`💾 Cached benchmark data for ${data.ticker} (${timeRange})`);
   } catch (error) {
     console.warn(`⚠️ Failed to cache benchmark data:`, error);
   }
@@ -81,21 +160,28 @@ const saveBenchmarkCache = (data: BenchmarkData): void => {
 /**
  * Fetch benchmark data from Yahoo Finance
  * Uses multiple CORS proxies with fallback
+ *
+ * @param ticker - Yahoo Finance ticker symbol
+ * @param name - Display name for the benchmark
+ * @param timeRange - Time range for the chart (affects data granularity)
+ * @param forceRefresh - Skip cache and fetch fresh data
  */
 export const fetchBenchmarkData = async (
   ticker: string,
   name: string,
+  timeRange: BenchmarkTimeRange = 'ALL',
   forceRefresh: boolean = false
 ): Promise<BenchmarkData | null> => {
-  console.log(`📈 Fetching benchmark: ${name} (${ticker})`);
+  console.log(`📈 Fetching benchmark: ${name} (${ticker}) for ${timeRange}`);
 
   // Check cache first (unless force refresh)
   if (!forceRefresh) {
-    const cached = loadCachedBenchmark(ticker);
+    const cached = loadCachedBenchmark(ticker, timeRange);
     if (cached) {
       // Check if cache is fresh (within TTL)
       const now = Date.now();
-      if (now - cached.lastUpdated <= CACHE_TTL_MS) {
+      const ttl = getCacheTTL(timeRange);
+      if (now - cached.lastUpdated <= ttl) {
         return cached;
       }
       // Cache expired but exists - we'll try to fetch fresh data
@@ -103,8 +189,11 @@ export const fetchBenchmarkData = async (
     }
   }
 
-  // Build Yahoo Finance URL - request 5 years of data for maximum flexibility
-  const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=5y&interval=1d`;
+  // Get appropriate Yahoo Finance parameters based on timeRange and ticker type
+  const { range, interval } = getYahooParams(ticker, timeRange);
+  const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?range=${range}&interval=${interval}`;
+
+  console.log(`📊 Fetching with range=${range}, interval=${interval} (crypto: ${isCryptoTicker(ticker)})`);
 
   let lastError: Error | null = null;
 
@@ -179,10 +268,10 @@ export const fetchBenchmarkData = async (
         currency: getCurrencyForTicker(ticker),
       };
 
-      // Cache the data
-      saveBenchmarkCache(benchmarkData);
+      // Cache the data with timeRange-specific key
+      saveBenchmarkCache(benchmarkData, timeRange);
 
-      console.log(`✅ Fetched ${priceHistory.length} data points for ${benchmarkName} (${ticker})`);
+      console.log(`✅ Fetched ${priceHistory.length} data points for ${benchmarkName} (${ticker}, ${timeRange})`);
       return benchmarkData;
 
     } catch (error: any) {
@@ -192,7 +281,7 @@ export const fetchBenchmarkData = async (
   }
 
   // All proxies failed - try to return stale cache as fallback
-  const staleCache = loadCachedBenchmark(ticker);
+  const staleCache = loadCachedBenchmark(ticker, timeRange);
   if (staleCache) {
     console.warn(`⚠️ Using stale cache for ${ticker} (all proxies failed)`);
     return staleCache;
@@ -204,16 +293,21 @@ export const fetchBenchmarkData = async (
 
 /**
  * Fetch multiple benchmarks in parallel
+ *
+ * @param configs - Array of benchmark configurations
+ * @param timeRange - Time range for data fetching
+ * @param forceRefresh - Skip cache and fetch fresh data
  */
 export const fetchMultipleBenchmarks = async (
   configs: BenchmarkConfig[],
+  timeRange: BenchmarkTimeRange = 'ALL',
   forceRefresh: boolean = false
 ): Promise<Map<string, BenchmarkData>> => {
   const results = new Map<string, BenchmarkData>();
 
   // Fetch all benchmarks in parallel
   const promises = configs.map(async (config) => {
-    const data = await fetchBenchmarkData(config.ticker, config.name, forceRefresh);
+    const data = await fetchBenchmarkData(config.ticker, config.name, timeRange, forceRefresh);
     if (data) {
       results.set(config.ticker, data);
     }
@@ -225,10 +319,117 @@ export const fetchMultipleBenchmarks = async (
 };
 
 /**
+ * Linear interpolation helper
+ * Finds the interpolated price at a given timestamp between two known points
+ */
+const interpolatePrice = (
+  targetTimestamp: number,
+  beforePoint: [number, number],
+  afterPoint: [number, number]
+): number => {
+  const [t1, p1] = beforePoint;
+  const [t2, p2] = afterPoint;
+
+  if (t2 === t1) return p1;
+
+  // Linear interpolation: p = p1 + (p2 - p1) * (t - t1) / (t2 - t1)
+  const ratio = (targetTimestamp - t1) / (t2 - t1);
+  return p1 + (p2 - p1) * ratio;
+};
+
+/**
+ * Find the interpolated price at a specific timestamp using binary search
+ */
+const getPriceAtTimestamp = (
+  timestamp: number,
+  priceHistory: number[][]
+): number | null => {
+  if (priceHistory.length === 0) return null;
+
+  // If before all data, return first price
+  if (timestamp <= priceHistory[0][0]) {
+    return priceHistory[0][1];
+  }
+
+  // If after all data, return last price
+  if (timestamp >= priceHistory[priceHistory.length - 1][0]) {
+    return priceHistory[priceHistory.length - 1][1];
+  }
+
+  // Binary search to find surrounding points
+  let left = 0;
+  let right = priceHistory.length - 1;
+
+  while (left < right - 1) {
+    const mid = Math.floor((left + right) / 2);
+    if (priceHistory[mid][0] <= timestamp) {
+      left = mid;
+    } else {
+      right = mid;
+    }
+  }
+
+  // Interpolate between left and right points
+  return interpolatePrice(
+    timestamp,
+    priceHistory[left] as [number, number],
+    priceHistory[right] as [number, number]
+  );
+};
+
+/**
  * Normalize benchmark data to percentage change from a starting point
- * Aligns data points with portfolio chart timestamps
+ * Uses linear interpolation to create smooth curves with INTERPOLATION_POINTS data points
+ *
+ * @param benchmarkData - Raw benchmark price history
+ * @param startTimestamp - Start timestamp for normalization (chart start)
+ * @param endTimestamp - End timestamp for normalization (chart end / now)
+ * @param numPoints - Number of interpolated points to generate
  */
 export const normalizeBenchmarkData = (
+  benchmarkData: BenchmarkData,
+  startTimestamp: number,
+  endTimestamp: number,
+  numPoints: number = INTERPOLATION_POINTS
+): NormalizedBenchmarkPoint[] => {
+  if (!benchmarkData.priceHistory.length) {
+    return [];
+  }
+
+  const priceHistory = benchmarkData.priceHistory;
+
+  // Get the starting price (at or before startTimestamp)
+  const startPrice = getPriceAtTimestamp(startTimestamp, priceHistory);
+  if (!startPrice || startPrice <= 0) {
+    console.warn(`⚠️ Could not determine start price for ${benchmarkData.ticker}`);
+    return [];
+  }
+
+  // Generate evenly spaced timestamps
+  const timeStep = (endTimestamp - startTimestamp) / (numPoints - 1);
+  const normalizedPoints: NormalizedBenchmarkPoint[] = [];
+
+  for (let i = 0; i < numPoints; i++) {
+    const timestamp = startTimestamp + (timeStep * i);
+    const price = getPriceAtTimestamp(timestamp, priceHistory);
+
+    if (price !== null) {
+      const percentChange = ((price - startPrice) / startPrice) * 100;
+      normalizedPoints.push({
+        timestamp,
+        percentChange,
+      });
+    }
+  }
+
+  return normalizedPoints;
+};
+
+/**
+ * Legacy normalization function that aligns with provided timestamps
+ * Kept for backward compatibility
+ */
+export const normalizeBenchmarkDataToTimestamps = (
   benchmarkData: BenchmarkData,
   chartTimestamps: number[]
 ): NormalizedBenchmarkPoint[] => {
@@ -238,55 +439,26 @@ export const normalizeBenchmarkData = (
 
   const priceHistory = benchmarkData.priceHistory;
   const chartStart = chartTimestamps[0];
-  const chartEnd = chartTimestamps[chartTimestamps.length - 1];
 
-  // Find the starting price (closest to chart start)
-  let startPrice: number | null = null;
-
-  for (const [timestamp, price] of priceHistory) {
-    if (timestamp <= chartStart) {
-      startPrice = price;
-    } else {
-      break;
-    }
-  }
-
-  // If no price before chart start, use the first available price
-  if (startPrice === null && priceHistory.length > 0) {
-    startPrice = priceHistory[0][1];
-  }
-
-  if (!startPrice) {
+  // Get the starting price
+  const startPrice = getPriceAtTimestamp(chartStart, priceHistory);
+  if (!startPrice || startPrice <= 0) {
     return [];
   }
 
-  // Create normalized points for each chart timestamp
+  // Create normalized points for each chart timestamp using interpolation
   const normalizedPoints: NormalizedBenchmarkPoint[] = [];
 
   for (const chartTimestamp of chartTimestamps) {
-    // Find the closest benchmark price for this timestamp
-    let closestPrice = startPrice;
+    const price = getPriceAtTimestamp(chartTimestamp, priceHistory);
 
-    for (const [timestamp, price] of priceHistory) {
-      if (timestamp <= chartTimestamp) {
-        closestPrice = price;
-      } else {
-        break;
-      }
+    if (price !== null) {
+      const percentChange = ((price - startPrice) / startPrice) * 100;
+      normalizedPoints.push({
+        timestamp: chartTimestamp,
+        percentChange,
+      });
     }
-
-    // If chartTimestamp is after all benchmark data, use the last price
-    if (chartTimestamp > priceHistory[priceHistory.length - 1][0]) {
-      closestPrice = priceHistory[priceHistory.length - 1][1];
-    }
-
-    // Calculate percentage change from start
-    const percentChange = ((closestPrice - startPrice) / startPrice) * 100;
-
-    normalizedPoints.push({
-      timestamp: chartTimestamp,
-      percentChange,
-    });
   }
 
   return normalizedPoints;
@@ -294,12 +466,20 @@ export const normalizeBenchmarkData = (
 
 /**
  * Prepare benchmark data for chart rendering
- * Returns data for all visible benchmarks, normalized to chart timestamps
+ * Returns data for all visible benchmarks, normalized with interpolation
+ *
+ * @param benchmarkDataMap - Map of ticker to benchmark data
+ * @param benchmarkConfigs - Benchmark configurations (for visibility, color, etc.)
+ * @param startTimestamp - Chart start timestamp
+ * @param endTimestamp - Chart end timestamp
+ * @param numPoints - Number of data points to generate (default: 150)
  */
 export const prepareBenchmarksForChart = (
   benchmarkDataMap: Map<string, BenchmarkData>,
   benchmarkConfigs: BenchmarkConfig[],
-  chartTimestamps: number[]
+  startTimestamp: number,
+  endTimestamp: number,
+  numPoints: number = INTERPOLATION_POINTS
 ): ChartBenchmarkData[] => {
   const chartBenchmarks: ChartBenchmarkData[] = [];
 
@@ -309,11 +489,12 @@ export const prepareBenchmarksForChart = (
     const data = benchmarkDataMap.get(config.ticker);
     if (!data) continue;
 
-    const normalizedData = normalizeBenchmarkData(data, chartTimestamps);
+    // Use the new interpolation-based normalization
+    const normalizedData = normalizeBenchmarkData(data, startTimestamp, endTimestamp, numPoints);
 
     if (normalizedData.length === 0) continue;
 
-    // Calculate total return for the period
+    // Calculate total return for the period (last point's percent change)
     const returnPercent = normalizedData.length > 0
       ? normalizedData[normalizedData.length - 1].percentChange
       : 0;
@@ -445,7 +626,8 @@ export const validateBenchmarkTicker = async (ticker: string): Promise<{
   error?: string;
 }> => {
   try {
-    const data = await fetchBenchmarkData(ticker, ticker, true);
+    // Use ALL timeRange for validation to get maximum data
+    const data = await fetchBenchmarkData(ticker, ticker, 'ALL', true);
 
     if (data && data.priceHistory.length > 0) {
       return {

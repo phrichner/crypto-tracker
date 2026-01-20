@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag, Currency, BenchmarkSettings, BenchmarkData } from './types';
+import { Asset, Portfolio, PortfolioSummary, Transaction, HistorySnapshot, TransactionTag, Currency, BenchmarkSettings, BenchmarkData, TransactionType } from './types';
 import { fetchCryptoPrice, fetchAssetHistory, delay } from './services/geminiService';
 import { fetchExchangeRates, fetchHistoricalExchangeRatesForDate, fetchHistoricalExchangeRates, convertCurrencySync } from './services/currencyService'; // P1.1B CHANGE: Added fetchHistoricalExchangeRatesForDate
 import { AssetCard } from './components/AssetCard';
@@ -16,7 +16,7 @@ import { calculateRealizedPnL, detectAssetNativeCurrency, getHistoricalPrice, is
 import { validateBuyTransaction, validateTransactionDeletion, getBalanceAtDate } from './services/cashFlowValidation'; // P3: Cash Flow Validation
 import { Wallet, Download, Upload, Settings, Key, FolderOpen, Plus, Check } from 'lucide-react';
 import { testPhase1 } from './services/riskMetricsService'; // P1.2 TEST IMPORT
-import { createDefaultBenchmarkSettings, fetchMultipleBenchmarks } from './services/benchmarkService'; // Benchmark comparison
+import { createDefaultBenchmarkSettings, fetchMultipleBenchmarks, BenchmarkTimeRange } from './services/benchmarkService'; // Benchmark comparison
 
 // Portfolio colors for visual distinction
 const PORTFOLIO_COLORS = [
@@ -112,6 +112,9 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [sellModalAsset, setSellModalAsset] = useState<Asset | null>(null); // P2: Sell modal state
   const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false); // P3: Transaction modal state
+  // Quick transaction pre-selection state (for opening modal from position card icons)
+  const [quickTransactionAsset, setQuickTransactionAsset] = useState<string | undefined>(undefined);
+  const [quickTransactionType, setQuickTransactionType] = useState<'DEPOSIT' | 'BUY' | 'SELL' | 'WITHDRAW' | 'TRANSFER' | 'INCOME' | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // P1.1 CHANGE: Lift displayCurrency and exchangeRates to App level
@@ -125,6 +128,7 @@ const App: React.FC = () => {
   const [benchmarkDataMap, setBenchmarkDataMap] = useState<Map<string, BenchmarkData>>(new Map());
   const [isBenchmarkLoading, setIsBenchmarkLoading] = useState(false);
   const [benchmarkLoadingTickers, setBenchmarkLoadingTickers] = useState<string[]>([]);
+  const [benchmarkTimeRange, setBenchmarkTimeRange] = useState<BenchmarkTimeRange>('ALL');
 
   // Get active portfolio
   const activePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
@@ -181,7 +185,7 @@ const App: React.FC = () => {
     }));
   }, [activePortfolioId]);
 
-  // Fetch benchmark data when visible benchmarks change
+  // Fetch benchmark data when visible benchmarks or timeRange change
   useEffect(() => {
     const visibleBenchmarks = benchmarkSettings.benchmarks.filter(b => b.visible);
 
@@ -195,9 +199,10 @@ const App: React.FC = () => {
       setIsBenchmarkLoading(true);
 
       try {
-        const dataMap = await fetchMultipleBenchmarks(visibleBenchmarks, false);
+        // Pass benchmarkTimeRange to get appropriate data granularity
+        const dataMap = await fetchMultipleBenchmarks(visibleBenchmarks, benchmarkTimeRange, false);
         setBenchmarkDataMap(dataMap);
-        console.log(`📊 Fetched ${dataMap.size} benchmark(s)`);
+        console.log(`📊 Fetched ${dataMap.size} benchmark(s) for timeRange: ${benchmarkTimeRange}`);
       } catch (error) {
         console.error('❌ Failed to fetch benchmarks:', error);
       } finally {
@@ -207,7 +212,7 @@ const App: React.FC = () => {
     };
 
     fetchBenchmarks();
-  }, [benchmarkSettings.benchmarks]);
+  }, [benchmarkSettings.benchmarks, benchmarkTimeRange]);
 
   useEffect(() => {
     const checkApiKey = () => {
@@ -2797,6 +2802,47 @@ const App: React.FC = () => {
     }
     recordHistorySnapshot(updated);
     setIsLoading(false);
+
+    // Also refresh visible benchmarks when refreshing portfolio
+    handleBenchmarkRefresh();
+  };
+
+  // Force refresh visible benchmark data
+  const handleBenchmarkRefresh = useCallback(async () => {
+    const visibleBenchmarks = benchmarkSettings.benchmarks.filter(b => b.visible);
+    if (visibleBenchmarks.length === 0) return;
+
+    const tickersToFetch = visibleBenchmarks.map(b => b.ticker);
+    setBenchmarkLoadingTickers(tickersToFetch);
+    setIsBenchmarkLoading(true);
+
+    try {
+      // Force refresh with current timeRange
+      const dataMap = await fetchMultipleBenchmarks(visibleBenchmarks, benchmarkTimeRange, true);
+      setBenchmarkDataMap(dataMap);
+      console.log(`📊 Refreshed ${dataMap.size} benchmark(s) for timeRange: ${benchmarkTimeRange}`);
+    } catch (error) {
+      console.error('Failed to refresh benchmarks:', error);
+    } finally {
+      setIsBenchmarkLoading(false);
+      setBenchmarkLoadingTickers([]);
+    }
+  }, [benchmarkSettings.benchmarks, benchmarkTimeRange]);
+
+  // Handle time range change from Summary component
+  const handleTimeRangeChange = useCallback((timeRange: BenchmarkTimeRange) => {
+    console.log(`📊 Time range changed to: ${timeRange}`);
+    setBenchmarkTimeRange(timeRange);
+  }, []);
+
+  // Quick transaction handler - opens TransactionModal with pre-selected asset and type
+  // Note: TransactionType from types.ts uses 'WITHDRAWAL', but TransactionModal uses 'WITHDRAW'
+  const handleQuickTransaction = (asset: Asset, transactionType: TransactionType) => {
+    setQuickTransactionAsset(asset.ticker);
+    // Map WITHDRAWAL -> WITHDRAW for TransactionModal compatibility
+    const modalType = transactionType === 'WITHDRAWAL' ? 'WITHDRAW' : transactionType;
+    setQuickTransactionType(modalType as 'DEPOSIT' | 'BUY' | 'SELL' | 'WITHDRAW' | 'TRANSFER' | 'INCOME');
+    setIsTransactionModalOpen(true);
   };
 
   const exportPortfolio = () => {
@@ -3030,6 +3076,9 @@ const App: React.FC = () => {
           benchmarkDataMap={benchmarkDataMap}
           isBenchmarkLoading={isBenchmarkLoading}
           benchmarkLoadingTickers={benchmarkLoadingTickers}
+          onBenchmarkRefresh={handleBenchmarkRefresh}
+          onTimeRangeChange={handleTimeRangeChange}
+          onNewTransaction={() => setIsTransactionModalOpen(true)}
         />
         
         {/* P1.1 NEW: Add TagAnalytics component */}
@@ -3047,20 +3096,6 @@ const App: React.FC = () => {
           historicalRates={historicalRates}
         />
 
-        {/* P3: New Transaction Button - Primary Entry Point */}
-        <div className="mb-6">
-          <button
-            onClick={() => setIsTransactionModalOpen(true)}
-            className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl transition-all shadow-xl hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <Plus size={24} strokeWidth={2.5} />
-            New Transaction
-          </button>
-          <p className="text-center text-slate-400 text-sm mt-2">
-            Deposit, Buy, Withdraw, or Record Income
-          </p>
-        </div>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {assets.map(asset => (
             <AssetCard
@@ -3074,6 +3109,7 @@ const App: React.FC = () => {
               onUpdate={handleUpdateAsset}
               onRetryHistory={() => {}}
               onSell={(asset) => setSellModalAsset(asset)}
+              onQuickTransaction={handleQuickTransaction}
               closedPositions={activePortfolio?.closedPositions || []}
             />
           ))}
@@ -3144,7 +3180,11 @@ const App: React.FC = () => {
       {/* P3: Transaction Modal */}
       {isTransactionModalOpen && (
         <TransactionModal
-          onClose={() => setIsTransactionModalOpen(false)}
+          onClose={() => {
+            setIsTransactionModalOpen(false);
+            setQuickTransactionAsset(undefined);
+            setQuickTransactionType(undefined);
+          }}
           onDeposit={handleDeposit}
           onBuy={handleBuyWithValidation}
           onSell={handleBuyWithValidation}  // Unified: sell now routes through buy logic
@@ -3156,6 +3196,8 @@ const App: React.FC = () => {
           currentPortfolioId={activePortfolioId}
           displayCurrency={displayCurrency}
           exchangeRates={exchangeRates}
+          initialTab={quickTransactionType}
+          initialAssetTicker={quickTransactionAsset}
         />
       )}
 

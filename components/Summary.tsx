@@ -1,11 +1,11 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { PortfolioSummary, Asset, Currency, ClosedPosition, BenchmarkSettings, ChartBenchmarkData, BenchmarkData } from '../types';
 import { fetchExchangeRates, convertCurrencySync, fetchHistoricalExchangeRates, convertCurrencySyncHistorical } from '../services/currencyService';
-import { TrendingUp, PieChart, Clock, RefreshCw, TrendingDown, AlertTriangle, Scale } from 'lucide-react';
+import { TrendingUp, PieChart, Clock, RefreshCw, TrendingDown, AlertTriangle, Scale, Plus } from 'lucide-react';
 import { getRebalancingAlertCount, DEFAULT_REBALANCING_SETTINGS } from '../services/rebalancingService';
 import { RebalancingModal } from './RebalancingModal';
 import { BenchmarkToggleBar } from './BenchmarkToggleBar';
-import { prepareBenchmarksForChart } from '../services/benchmarkService';
+import { prepareBenchmarksForChart, BenchmarkTimeRange } from '../services/benchmarkService';
 
 // P1.1 CHANGE: Updated interface to receive displayCurrency and exchangeRates as props
 interface SummaryProps {
@@ -24,6 +24,10 @@ interface SummaryProps {
   benchmarkDataMap: Map<string, BenchmarkData>;
   isBenchmarkLoading: boolean;
   benchmarkLoadingTickers: string[];
+  onBenchmarkRefresh: () => void;  // Force refresh visible benchmarks
+  onTimeRangeChange: (timeRange: BenchmarkTimeRange) => void;  // Notify parent of time range changes for benchmark fetching
+  // New Transaction callback
+  onNewTransaction: () => void;
 }
 
 const CHART_COLORS = [
@@ -78,8 +82,18 @@ export const Summary: React.FC<SummaryProps> = ({
   benchmarkDataMap,
   isBenchmarkLoading,
   benchmarkLoadingTickers,
+  onBenchmarkRefresh,
+  onTimeRangeChange,
+  onNewTransaction,
 }) => {
-  const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
+  const [timeRange, setTimeRangeLocal] = useState<TimeRange>('ALL');
+
+  // Wrapper to update local state AND notify parent for benchmark fetching
+  const setTimeRange = (range: TimeRange) => {
+    setTimeRangeLocal(range);
+    // Map local TimeRange to BenchmarkTimeRange (they're compatible)
+    onTimeRangeChange(range as BenchmarkTimeRange);
+  };
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [showRebalancingModal, setShowRebalancingModal] = useState(false);
@@ -638,8 +652,12 @@ export const Summary: React.FC<SummaryProps> = ({
   const chartBenchmarks = useMemo((): ChartBenchmarkData[] => {
     if (!benchmarkSettings || chartData.length === 0) return [];
 
-    const chartTimestamps = chartData.map(d => d.timestamp);
-    return prepareBenchmarksForChart(benchmarkDataMap, benchmarkSettings.benchmarks, chartTimestamps);
+    // Get start and end timestamps from chartData for proper interpolation
+    const startTimestamp = chartData[0].timestamp;
+    const endTimestamp = chartData[chartData.length - 1].timestamp;
+
+    // Use the new interpolation-based prepareBenchmarksForChart with 150 points
+    return prepareBenchmarksForChart(benchmarkDataMap, benchmarkSettings.benchmarks, startTimestamp, endTimestamp);
   }, [benchmarkSettings, benchmarkDataMap, chartData]);
 
   // Calculate portfolio return % for the current time period (for benchmark comparison)
@@ -894,6 +912,20 @@ export const Summary: React.FC<SummaryProps> = ({
         />
       )}
 
+      {/* New Transaction Button - Between summary cards and chart */}
+      <div className="mb-4">
+        <button
+          onClick={onNewTransaction}
+          className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-lg font-semibold rounded-xl transition-all shadow-xl hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98]"
+        >
+          <Plus size={24} strokeWidth={2.5} />
+          New Transaction
+        </button>
+        <p className="text-center text-slate-400 text-sm mt-2">
+          Deposit, Buy, Sell, Withdraw, Transfer, or Record Income
+        </p>
+      </div>
+
       <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg">
           <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-4">
               {/* P4 CHANGE: Show selected currency in title */}
@@ -1076,6 +1108,7 @@ export const Summary: React.FC<SummaryProps> = ({
               portfolioReturn={portfolioReturnPercent}
               isLoading={isBenchmarkLoading}
               loadingTickers={benchmarkLoadingTickers}
+              onRefresh={onBenchmarkRefresh}
             />
           </div>
         )}
@@ -1136,14 +1169,16 @@ export const Summary: React.FC<SummaryProps> = ({
           const zeroLineY = getY(0);
 
           return (
-            <div className="relative">
-              <div className="absolute left-0 top-0 bottom-6 w-12 flex flex-col justify-between text-[9px] text-slate-500 pointer-events-none py-2 text-right pr-1 z-10">
-                {yLabelsPercent.map((lbl, i) => (
-                  <span key={i}>{lbl.text}</span>
-                ))}
-              </div>
+            <div className="space-y-6">
+              {/* Chart container with Y-axis */}
+              <div className="relative h-72 mb-8">
+                <div className="absolute left-0 top-0 bottom-8 w-12 flex flex-col justify-between text-[9px] text-slate-500 pointer-events-none py-2 text-right pr-2">
+                  {yLabelsPercent.map((lbl, i) => (
+                    <span key={i}>{lbl.text}</span>
+                  ))}
+                </div>
 
-              <div className="h-64 bg-slate-900/30 rounded-lg relative ml-12 w-[calc(100%-48px)]">
+                <div className="h-64 bg-slate-900/30 rounded-lg relative ml-14 w-[calc(100%-56px)]">
                 {!ratesLoaded || !historicalRatesLoaded ? (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="text-slate-500 text-sm flex items-center gap-2">
@@ -1200,17 +1235,18 @@ export const Summary: React.FC<SummaryProps> = ({
                 )}
 
                 {/* X-axis labels */}
-                <div className="absolute bottom-0 left-0 right-0 h-6 flex justify-between px-2 pointer-events-none">
+                <div className="absolute -bottom-6 left-0 right-0 h-6 flex justify-between px-2 pointer-events-none">
                   {xAxisLabels.map((lbl: { x: number; text: string }, i: number) => (
                     <span
                       key={i}
                       className="text-[10px] text-slate-500 whitespace-nowrap"
-                      style={{ position: 'absolute', left: `${lbl.x}%`, transform: 'translateX(-50%)', bottom: '-20px' }}
+                      style={{ position: 'absolute', left: `${lbl.x}%`, transform: 'translateX(-50%)' }}
                     >
                       {lbl.text}
                     </span>
                   ))}
                 </div>
+              </div>
               </div>
 
               {/* Chart Legend */}

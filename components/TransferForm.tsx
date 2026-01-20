@@ -9,6 +9,7 @@ interface TransferFormProps {
   assets: Asset[];
   portfolios: Portfolio[];
   currentPortfolioId: string;
+  initialAssetTicker?: string;
 }
 
 export const TransferForm: React.FC<TransferFormProps> = ({
@@ -16,9 +17,12 @@ export const TransferForm: React.FC<TransferFormProps> = ({
   onClose,
   assets,
   portfolios,
-  currentPortfolioId
+  currentPortfolioId,
+  initialAssetTicker
 }) => {
-  const [selectedAssetId, setSelectedAssetId] = useState('');
+  // Find asset ID from ticker if provided
+  const initialAsset = initialAssetTicker ? assets.find(a => a.ticker.toUpperCase() === initialAssetTicker.toUpperCase()) : null;
+  const [selectedAssetId, setSelectedAssetId] = useState(initialAsset?.id || '');
   const [quantity, setQuantity] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [destinationPortfolioId, setDestinationPortfolioId] = useState('');

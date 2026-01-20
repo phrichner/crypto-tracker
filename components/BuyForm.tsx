@@ -7,10 +7,11 @@ interface BuyFormProps {
   onBuy: (sourceTicker: string, sourceQuantity: number, destinationTicker: string, destinationQuantity: number, date: string, tag?: TransactionTag) => Promise<void>;
   onClose: () => void;
   assets: Asset[];
+  initialSourceTicker?: string;
 }
 
-export const BuyForm: React.FC<BuyFormProps> = ({ onBuy, onClose, assets }) => {
-  const [sourceTicker, setSourceTicker] = useState('');
+export const BuyForm: React.FC<BuyFormProps> = ({ onBuy, onClose, assets, initialSourceTicker }) => {
+  const [sourceTicker, setSourceTicker] = useState(initialSourceTicker || '');
   const [sourceQuantity, setSourceQuantity] = useState('');
   const [destinationTicker, setDestinationTicker] = useState('');
   const [destinationQuantity, setDestinationQuantity] = useState('');

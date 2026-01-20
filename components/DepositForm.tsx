@@ -1,18 +1,45 @@
 import React, { useState } from 'react';
 import { TransactionTag, Currency } from '../types';
-import { DollarSign, Calendar, Info, Building2 } from 'lucide-react';
+import { Calendar, Info, Building2 } from 'lucide-react';
 import { TagSelector } from './TagSelector';
+
+// Currency symbol mapping
+const getCurrencySymbol = (currency: Currency): string => {
+  const symbols: Record<Currency, string> = {
+    USD: '$',
+    CHF: 'CHF',
+    EUR: '€',
+    GBP: '£',
+    JPY: '¥',
+    CAD: 'C$',
+    AUD: 'A$',
+  };
+  return symbols[currency] || currency;
+};
 
 interface DepositFormProps {
   onDeposit: (ticker: string, quantity: number, costBasis: number, date: string, depositSource: string, tag?: TransactionTag, costBasisCurrency?: Currency) => Promise<void>;
   onClose: () => void;
+  initialTicker?: string;
 }
 const DEPOSIT_SOURCES = ['Bank Transfer', 'Coinbase', 'Binance', 'Kraken', 'External Wallet', 'Other Exchange'];
 const CURRENCIES: Currency[] = ['USD', 'CHF', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'];
 
-export const DepositForm: React.FC<DepositFormProps> = ({ onDeposit, onClose }) => {
-  const [ticker, setTicker] = useState('');
-  const [currency, setCurrency] = useState<Currency>('USD');
+// Helper to detect currency from ticker
+const detectCurrencyFromTicker = (ticker: string): Currency => {
+  const upper = ticker.toUpperCase();
+  if (upper === 'CHF' || upper.endsWith('.SW')) return 'CHF';
+  if (upper === 'EUR' || upper.endsWith('.DE') || upper.endsWith('.F')) return 'EUR';
+  if (upper === 'GBP' || upper.endsWith('.L')) return 'GBP';
+  if (upper === 'JPY' || upper.endsWith('.T')) return 'JPY';
+  if (upper === 'CAD' || upper.endsWith('.TO')) return 'CAD';
+  if (upper === 'AUD' || upper.endsWith('.AX')) return 'AUD';
+  return 'USD';
+};
+
+export const DepositForm: React.FC<DepositFormProps> = ({ onDeposit, onClose, initialTicker }) => {
+  const [ticker, setTicker] = useState(initialTicker || '');
+  const [currency, setCurrency] = useState<Currency>(initialTicker ? detectCurrencyFromTicker(initialTicker) : 'USD');
   const [quantity, setQuantity] = useState('');
   const [costBasis, setCostBasis] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -97,7 +124,6 @@ export const DepositForm: React.FC<DepositFormProps> = ({ onDeposit, onClose }) 
       {/* Currency Selector */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          <DollarSign className="inline mr-2" size={16} />
           Cost Basis Currency *
         </label>
         <select
@@ -140,7 +166,9 @@ export const DepositForm: React.FC<DepositFormProps> = ({ onDeposit, onClose }) 
             Total Cost Basis ({currency}) *
           </label>
           <div className="relative">
-            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm font-medium">
+              {getCurrencySymbol(currency)}
+            </span>
             <input
               type="number"
               step="any"
@@ -148,7 +176,7 @@ export const DepositForm: React.FC<DepositFormProps> = ({ onDeposit, onClose }) 
               value={costBasis}
               onChange={(e) => setCostBasis(e.target.value)}
               placeholder="0.00"
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-10 pr-4 py-3 text-white placeholder-slate-500 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none"
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-12 pr-4 py-3 text-white placeholder-slate-500 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none"
               required
             />
           </div>

@@ -10,7 +10,7 @@
  */
 
 import React, { useState } from 'react';
-import { Plus, X, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { Plus, X, Check, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import {
   BenchmarkSettings,
   BenchmarkConfig,
@@ -30,6 +30,7 @@ interface BenchmarkToggleBarProps {
   portfolioReturn: number;  // Portfolio return % for comparison
   isLoading: boolean;
   loadingTickers: string[];  // Tickers currently being fetched
+  onRefresh: () => void;  // Force refresh visible benchmarks
 }
 
 export const BenchmarkToggleBar: React.FC<BenchmarkToggleBarProps> = ({
@@ -39,6 +40,7 @@ export const BenchmarkToggleBar: React.FC<BenchmarkToggleBarProps> = ({
   portfolioReturn,
   isLoading,
   loadingTickers,
+  onRefresh,
 }) => {
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [customTicker, setCustomTicker] = useState('');
@@ -111,7 +113,20 @@ export const BenchmarkToggleBar: React.FC<BenchmarkToggleBarProps> = ({
 
       {/* Benchmark chips */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-gray-400 text-sm mr-1">Compare with:</span>
+        <div className="flex items-center gap-2 mr-1">
+          <span className="text-gray-400 text-sm">Compare with:</span>
+          {/* Refresh button - only show when benchmarks are visible */}
+          {visibleCount > 0 && (
+            <button
+              onClick={onRefresh}
+              disabled={isLoading}
+              className="p-1 rounded hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+              title="Refresh benchmark data"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+          )}
+        </div>
 
         {settings.benchmarks.map((benchmark) => {
           const isActive = benchmark.visible;

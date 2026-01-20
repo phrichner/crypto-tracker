@@ -7,15 +7,19 @@ interface WithdrawFormProps {
   onWithdraw: (asset: Asset, quantity: number, date: string, withdrawalDestination: string, tag?: TransactionTag) => void;
   onClose: () => void;
   assets: Asset[];
+  initialAssetTicker?: string;
 }
 const WITHDRAWAL_DESTINATIONS = ['Bank Account', 'Hardware Wallet', 'Cold Storage', 'Other Exchange', 'Personal Use'];
 
 export const WithdrawForm: React.FC<WithdrawFormProps> = ({
   onWithdraw,
   onClose,
-  assets
+  assets,
+  initialAssetTicker
 }) => {
-  const [selectedAssetId, setSelectedAssetId] = useState('');
+  // Find asset ID from ticker if provided
+  const initialAsset = initialAssetTicker ? assets.find(a => a.ticker.toUpperCase() === initialAssetTicker.toUpperCase()) : null;
+  const [selectedAssetId, setSelectedAssetId] = useState(initialAsset?.id || '');
   const [quantity, setQuantity] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [withdrawalDestination, setWithdrawalDestination] = useState('Bank Account');

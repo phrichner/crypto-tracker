@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Asset, TransactionTag, Currency } from '../types';
+import { Asset, TransactionTag, Currency, TransactionType } from '../types';
 import { convertCurrencySync } from '../services/currencyService';
-import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle, Edit2, Save, X } from 'lucide-react';
+import { Trash2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, History, TrendingUp, TrendingDown, Signal, SignalLow, Target, AlertTriangle, Edit2, Save, X, Download, ShoppingCart, ArrowRightLeft, Upload, Coins } from 'lucide-react';
 
 interface AssetCardProps {
   asset: Asset;
@@ -13,6 +13,7 @@ interface AssetCardProps {
   onRetryHistory: (id: string) => void;
   onEditTransaction: (assetId: string, txId: string, updates: { quantity?: number; pricePerCoin?: number; date?: string; tag?: TransactionTag }) => void;
   onSell: (asset: Asset) => void; // P2: Trading Lifecycle - Open sell modal
+  onQuickTransaction: (asset: Asset, transactionType: TransactionType) => void; // Quick transaction from card
   closedPositions?: any[]; // P2: For calculating SELL transaction P&L
 }
 
@@ -143,7 +144,7 @@ const calculateFxAdjustedPnL = (
   };
 };
 
-export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue, onRemove, onRemoveTransaction, onRefresh, onUpdate, onEditTransaction, onSell, closedPositions }) => {
+export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue, onRemove, onRemoveTransaction, onRefresh, onUpdate, onEditTransaction, onSell, onQuickTransaction, closedPositions }) => {
   const [showDetails, setShowDetails] = useState(false);
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ quantity: string; pricePerCoin: string; date: string; tag: TransactionTag; customTag: string }>({
@@ -315,19 +316,60 @@ export const AssetCard: React.FC<AssetCardProps> = ({ asset, totalPortfolioValue
           {showDetails ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           {showDetails ? 'Hide' : 'Transactions'}
         </button>
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
+          {/* Transaction action buttons */}
+          <button
+            onClick={() => onQuickTransaction(asset, 'DEPOSIT')}
+            className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 transition-colors"
+            title="Deposit"
+          >
+            <Download size={14} />
+          </button>
+          <button
+            onClick={() => onQuickTransaction(asset, 'BUY')}
+            className="p-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 transition-colors"
+            title="Buy"
+          >
+            <ShoppingCart size={14} />
+          </button>
           <button
             onClick={() => onSell(asset)}
-            className="p-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition-colors"
-            title="Sell Asset"
+            className="p-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 transition-colors"
+            title="Sell"
           >
-            <TrendingDown size={16} />
+            <TrendingDown size={14} />
           </button>
-           <button onClick={() => onRefresh(asset.id)} disabled={asset.isUpdating} className={`p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-all ${asset.isUpdating ? 'animate-spin' : ''}`}>
-            <RefreshCw size={16} />
+          <button
+            onClick={() => onQuickTransaction(asset, 'TRANSFER')}
+            className="p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 transition-colors"
+            title="Transfer"
+          >
+            <ArrowRightLeft size={14} />
           </button>
-          <button onClick={() => onRemove(asset.id)} className="p-2 rounded-lg bg-slate-700 hover:bg-red-900/50 hover:text-red-400 text-slate-300 transition-colors">
-            <Trash2 size={16} />
+          <button
+            onClick={() => onQuickTransaction(asset, 'WITHDRAWAL')}
+            className="p-1.5 rounded-lg bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 transition-colors"
+            title="Withdraw"
+          >
+            <Upload size={14} />
+          </button>
+          <button
+            onClick={() => onQuickTransaction(asset, 'INCOME')}
+            className="p-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-400 transition-colors"
+            title="Income"
+          >
+            <Coins size={14} />
+          </button>
+
+          {/* Divider */}
+          <div className="w-px bg-slate-600 mx-1"></div>
+
+          {/* Utility buttons */}
+          <button onClick={() => onRefresh(asset.id)} disabled={asset.isUpdating} className={`p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-all ${asset.isUpdating ? 'animate-spin' : ''}`} title="Refresh Price">
+            <RefreshCw size={14} />
+          </button>
+          <button onClick={() => onRemove(asset.id)} className="p-1.5 rounded-lg bg-slate-700 hover:bg-red-900/50 hover:text-red-400 text-slate-300 transition-colors" title="Delete Asset">
+            <Trash2 size={14} />
           </button>
         </div>
       </div>

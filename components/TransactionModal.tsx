@@ -22,6 +22,9 @@ interface TransactionModalProps {
   currentPortfolioId: string;
   displayCurrency: Currency;
   exchangeRates: Record<string, number>;
+  // Optional pre-selection for quick transaction from position cards
+  initialTab?: TransactionType;
+  initialAssetTicker?: string;
 }
 
 type TransactionType = 'DEPOSIT' | 'BUY' | 'SELL' | 'WITHDRAW' | 'TRANSFER' | 'INCOME';
@@ -38,10 +41,22 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   portfolios,
   currentPortfolioId,
   displayCurrency,
-  exchangeRates
+  exchangeRates,
+  initialTab,
+  initialAssetTicker,
 }) => {
-  const [activeTab, setActiveTab] = useState<TransactionType>('DEPOSIT');
+  const [activeTab, setActiveTab] = useState<TransactionType>(initialTab || 'DEPOSIT');
   const [selectedSellAsset, setSelectedSellAsset] = useState<Asset | null>(null);
+
+  // If initialAssetTicker is provided and tab is SELL, pre-select the asset
+  React.useEffect(() => {
+    if (initialAssetTicker && initialTab === 'SELL') {
+      const asset = assets.find(a => a.ticker === initialAssetTicker);
+      if (asset) {
+        setSelectedSellAsset(asset);
+      }
+    }
+  }, [initialAssetTicker, initialTab, assets]);
 
   const tabs = [
     { type: 'DEPOSIT' as TransactionType, label: 'Deposit', icon: Download, color: 'emerald' },
@@ -126,11 +141,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'DEPOSIT' && (
-            <DepositForm onDeposit={onDeposit} onClose={onClose} />
+            <DepositForm onDeposit={onDeposit} onClose={onClose} initialTicker={initialAssetTicker} />
           )}
 
           {activeTab === 'BUY' && (
-            <BuyForm onBuy={onBuy} onClose={onClose} assets={assets} />
+            <BuyForm onBuy={onBuy} onClose={onClose} assets={assets} initialSourceTicker={initialAssetTicker} />
           )}
 
           {activeTab === 'SELL' && (
@@ -186,6 +201,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               onWithdraw={onWithdraw}
               onClose={onClose}
               assets={assets}
+              initialAssetTicker={initialAssetTicker}
             />
           )}
 
@@ -196,11 +212,12 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               assets={assets}
               portfolios={portfolios}
               currentPortfolioId={currentPortfolioId}
+              initialAssetTicker={initialAssetTicker}
             />
           )}
 
           {activeTab === 'INCOME' && (
-            <IncomeForm onIncome={onIncome} onClose={onClose} />
+            <IncomeForm onIncome={onIncome} onClose={onClose} initialTicker={initialAssetTicker} />
           )}
         </div>
       </div>

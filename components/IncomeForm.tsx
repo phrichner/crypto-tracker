@@ -6,6 +6,7 @@ import { TagSelector } from './TagSelector';
 interface IncomeFormProps {
   onIncome: (ticker: string, quantity: number, date: string, incomeType: IncomeType, incomeSource: string, tag?: TransactionTag, costBasis?: number, costBasisCurrency?: Currency) => Promise<void>;
   onClose: () => void;
+  initialTicker?: string;
 }
 const CURRENCIES: Currency[] = ['USD', 'CHF', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD'];
 
@@ -16,8 +17,8 @@ const INCOME_TYPES: Array<{ value: IncomeType; label: string; description: strin
   { value: 'interest', label: 'Interest', description: 'Interest earned from lending/savings' },
 ];
 
-export const IncomeForm: React.FC<IncomeFormProps> = ({ onIncome, onClose }) => {
-  const [ticker, setTicker] = useState('');
+export const IncomeForm: React.FC<IncomeFormProps> = ({ onIncome, onClose, initialTicker }) => {
+  const [ticker, setTicker] = useState(initialTicker || '');
   const [quantity, setQuantity] = useState('');
   const [costBasis, setCostBasis] = useState('');
   const [currency, setCurrency] = useState<Currency>('USD');

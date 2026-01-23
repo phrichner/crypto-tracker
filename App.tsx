@@ -12,9 +12,10 @@ import { ApiKeySettings } from './components/ApiKeySettings';
 import { PortfolioManager } from './components/PortfolioManager';
 import { SellModal } from './components/SellModal';
 import { ClosedPositionsPanel } from './components/ClosedPositionsPanel';
+import { TransactionHistoryPage } from './components/TransactionHistory';
 import { calculateRealizedPnL, detectAssetNativeCurrency, getHistoricalPrice, isCashAsset } from './services/portfolioService';
 import { validateBuyTransaction, validateTransactionDeletion, getBalanceAtDate } from './services/cashFlowValidation'; // P3: Cash Flow Validation
-import { Wallet, Download, Upload, Settings, Key, FolderOpen, Plus, Check } from 'lucide-react';
+import { Wallet, Download, Upload, Settings, Key, FolderOpen, Plus, Check, History } from 'lucide-react';
 import { testPhase1 } from './services/riskMetricsService'; // P1.2 TEST IMPORT
 import { createDefaultBenchmarkSettings, fetchMultipleBenchmarks, BenchmarkTimeRange } from './services/benchmarkService'; // Benchmark comparison
 
@@ -112,6 +113,7 @@ const App: React.FC = () => {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [sellModalAsset, setSellModalAsset] = useState<Asset | null>(null); // P2: Sell modal state
   const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false); // P3: Transaction modal state
+  const [showTransactionHistory, setShowTransactionHistory] = useState(false); // Transaction History view toggle
   // Quick transaction pre-selection state (for opening modal from position card icons)
   const [quickTransactionAsset, setQuickTransactionAsset] = useState<string | undefined>(undefined);
   const [quickTransactionType, setQuickTransactionType] = useState<'DEPOSIT' | 'BUY' | 'SELL' | 'WITHDRAW' | 'TRANSFER' | 'INCOME' | undefined>(undefined);
@@ -3015,10 +3017,35 @@ const App: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* View Toggle Tabs */}
+            <div className="flex items-center gap-1 ml-4 bg-slate-800/50 rounded-lg p-1 border border-slate-700">
+              <button
+                onClick={() => setShowTransactionHistory(false)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  !showTransactionHistory
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                Dashboard
+              </button>
+              <button
+                onClick={() => setShowTransactionHistory(true)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  showTransactionHistory
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <History size={14} />
+                Transactions
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setIsPortfolioManagerOpen(true)} 
+            <button
+              onClick={() => setIsPortfolioManagerOpen(true)}
               className="p-2 text-slate-400 hover:text-white transition-colors"
               title="Manage Portfolios"
             >
@@ -3058,71 +3085,80 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <main className="max-w-screen-2xl mx-auto px-8 py-8">
-        {/* P1.1 CHANGE: Pass displayCurrency, setDisplayCurrency, and exchangeRates to Summary */}
-        {/* P2: Pass closedPositions for realized P&L */}
-        <Summary
-          summary={summary}
-          assets={assets}
-          closedPositions={activePortfolio?.closedPositions || []}
-          onRefreshAll={handleRefreshAll}
-          isGlobalLoading={isLoading}
-          displayCurrency={displayCurrency}
-          setDisplayCurrency={setDisplayCurrency}
-          exchangeRates={exchangeRates}
-          portfolioId={activePortfolio?.id || ''}
-          benchmarkSettings={benchmarkSettings}
-          onBenchmarkSettingsChange={handleBenchmarkSettingsChange}
-          benchmarkDataMap={benchmarkDataMap}
-          isBenchmarkLoading={isBenchmarkLoading}
-          benchmarkLoadingTickers={benchmarkLoadingTickers}
-          onBenchmarkRefresh={handleBenchmarkRefresh}
-          onTimeRangeChange={handleTimeRangeChange}
-          onNewTransaction={() => setIsTransactionModalOpen(true)}
-        />
-        
-        {/* P1.1 NEW: Add TagAnalytics component */}
-        <TagAnalytics
-          assets={assets}
+      {/* Conditional rendering: Dashboard or Transaction History */}
+      {showTransactionHistory ? (
+        <TransactionHistoryPage
+          portfolios={portfolios}
           displayCurrency={displayCurrency}
           exchangeRates={exchangeRates}
         />
-
-        {/* P1.2 NEW: Add RiskMetrics component */}
-        <RiskMetrics
-          assets={assets}
-          displayCurrency={displayCurrency}
-          exchangeRates={exchangeRates}
-          historicalRates={historicalRates}
-        />
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {assets.map(asset => (
-            <AssetCard
-              key={asset.id}
-              asset={asset}
-              totalPortfolioValue={summary.totalValue}
-              onRemoveTransaction={handleRemoveTransaction}
-              onEditTransaction={handleEditTransaction}
-              onRefresh={handleRefreshAsset}
-              onRemove={() => handleRemoveAsset(asset.id)}
-              onUpdate={handleUpdateAsset}
-              onRetryHistory={() => {}}
-              onSell={(asset) => setSellModalAsset(asset)}
-              onQuickTransaction={handleQuickTransaction}
-              closedPositions={activePortfolio?.closedPositions || []}
-            />
-          ))}
-        </div>
-
-        {/* P2: Closed Positions Panel - placed at bottom after open positions */}
-        <div className="mt-4">
-          <ClosedPositionsPanel
+      ) : (
+        <main className="max-w-screen-2xl mx-auto px-8 py-8">
+          {/* P1.1 CHANGE: Pass displayCurrency, setDisplayCurrency, and exchangeRates to Summary */}
+          {/* P2: Pass closedPositions for realized P&L */}
+          <Summary
+            summary={summary}
+            assets={assets}
             closedPositions={activePortfolio?.closedPositions || []}
+            onRefreshAll={handleRefreshAll}
+            isGlobalLoading={isLoading}
             displayCurrency={displayCurrency}
+            setDisplayCurrency={setDisplayCurrency}
+            exchangeRates={exchangeRates}
+            portfolioId={activePortfolio?.id || ''}
+            benchmarkSettings={benchmarkSettings}
+            onBenchmarkSettingsChange={handleBenchmarkSettingsChange}
+            benchmarkDataMap={benchmarkDataMap}
+            isBenchmarkLoading={isBenchmarkLoading}
+            benchmarkLoadingTickers={benchmarkLoadingTickers}
+            onBenchmarkRefresh={handleBenchmarkRefresh}
+            onTimeRangeChange={handleTimeRangeChange}
+            onNewTransaction={() => setIsTransactionModalOpen(true)}
           />
-        </div>
-      </main>
+
+          {/* P1.1 NEW: Add TagAnalytics component */}
+          <TagAnalytics
+            assets={assets}
+            displayCurrency={displayCurrency}
+            exchangeRates={exchangeRates}
+          />
+
+          {/* P1.2 NEW: Add RiskMetrics component */}
+          <RiskMetrics
+            assets={assets}
+            displayCurrency={displayCurrency}
+            exchangeRates={exchangeRates}
+            historicalRates={historicalRates}
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {assets.map(asset => (
+              <AssetCard
+                key={asset.id}
+                asset={asset}
+                totalPortfolioValue={summary.totalValue}
+                onRemoveTransaction={handleRemoveTransaction}
+                onEditTransaction={handleEditTransaction}
+                onRefresh={handleRefreshAsset}
+                onRemove={() => handleRemoveAsset(asset.id)}
+                onUpdate={handleUpdateAsset}
+                onRetryHistory={() => {}}
+                onSell={(asset) => setSellModalAsset(asset)}
+                onQuickTransaction={handleQuickTransaction}
+                closedPositions={activePortfolio?.closedPositions || []}
+              />
+            ))}
+          </div>
+
+          {/* P2: Closed Positions Panel - placed at bottom after open positions */}
+          <div className="mt-4">
+            <ClosedPositionsPanel
+              closedPositions={activePortfolio?.closedPositions || []}
+              displayCurrency={displayCurrency}
+            />
+          </div>
+        </main>
+      )}
 
       <ApiKeySettings isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <PortfolioManager

@@ -99,6 +99,16 @@ export const Summary: React.FC<SummaryProps> = ({
   const [showRebalancingModal, setShowRebalancingModal] = useState(false);
   const [hoverData, setHoverData] = useState<{ x: number, y: number, data: ChartDataPoint } | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
+
+  // Hover state for Performance Comparison chart
+  const [comparisonHoverData, setComparisonHoverData] = useState<{
+    x: number;
+    y: number;
+    portfolioPercent: number;
+    benchmarks: { ticker: string; name: string; percent: number; color: string }[];
+    timestamp: number;
+  } | null>(null);
+  const comparisonChartRef = useRef<HTMLDivElement>(null);
   const [showAllAssets, setShowAllAssets] = useState(false);
   
   // P1.1 CHANGE: Remove local displayCurrency and exchangeRates state - now using props
@@ -663,7 +673,10 @@ export const Summary: React.FC<SummaryProps> = ({
   // Calculate portfolio return % for the current time period (for benchmark comparison)
   const portfolioReturnPercent = useMemo(() => {
     if (chartData.length < 2) return 0;
-    const startValue = chartData[0].costBasis;  // Use cost basis as starting point
+    // Find first non-zero market value (when we actually owned assets)
+    const firstNonZeroIndex = chartData.findIndex(d => d.marketValue > 0);
+    if (firstNonZeroIndex < 0) return 0;
+    const startValue = chartData[firstNonZeroIndex].marketValue;
     const endValue = chartData[chartData.length - 1].marketValue;
     if (startValue === 0) return 0;
     return ((endValue - startValue) / startValue) * 100;
@@ -1115,11 +1128,20 @@ export const Summary: React.FC<SummaryProps> = ({
 
         {/* Performance Comparison Chart */}
         {(() => {
-          // Calculate normalized portfolio performance (% change from start)
-          const portfolioPerformanceData = chartData.map((d: ChartDataPoint) => {
-            const startCost = chartData[0].costBasis;
-            if (startCost === 0) return { timestamp: d.timestamp, percentChange: 0 };
-            const percentChange = ((d.marketValue - startCost) / startCost) * 100;
+          // Calculate normalized portfolio performance (% change from starting market value)
+          // This shows performance over time, comparable to benchmark indices
+
+          // Find the first data point where we actually have assets (market value > 0)
+          // This is important for 'ALL' time range which starts slightly before first transaction
+          const firstNonZeroIndex = chartData.findIndex(d => d.marketValue > 0);
+          const startMarketValue = firstNonZeroIndex >= 0 ? chartData[firstNonZeroIndex].marketValue : 0;
+
+          const portfolioPerformanceData = chartData.map((d: ChartDataPoint, idx: number) => {
+            // For points before we owned any assets, show 0%
+            if (startMarketValue === 0 || idx < firstNonZeroIndex) {
+              return { timestamp: d.timestamp, percentChange: 0 };
+            }
+            const percentChange = ((d.marketValue - startMarketValue) / startMarketValue) * 100;
             return { timestamp: d.timestamp, percentChange };
           });
 
@@ -1178,7 +1200,71 @@ export const Summary: React.FC<SummaryProps> = ({
                   ))}
                 </div>
 
-                <div className="h-64 bg-slate-900/30 rounded-lg relative ml-14 w-[calc(100%-56px)]">
+                <div
+                  ref={comparisonChartRef}
+                  className="h-64 bg-slate-900/30 rounded-lg relative ml-14 w-[calc(100%-56px)]"
+                  onMouseMove={(e) => {
+                    if (!comparisonChartRef.current || portfolioPerformanceData.length === 0) return;
+                    const rect = comparisonChartRef.current.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const width = rect.width;
+                    if (width === 0) return;
+                    const ratio = Math.max(0, Math.min(1, x / width));
+                    const index = Math.floor(ratio * (portfolioPerformanceData.length - 1));
+                    const portfolioPoint = portfolioPerformanceData[index];
+
+                    // Get benchmark values at this index
+                    const benchmarkValues = chartBenchmarks.map(b => {
+                      const benchmarkIndex = Math.floor(ratio * (b.data.length - 1));
+                      const point = b.data[benchmarkIndex];
+                      return {
+                        ticker: b.ticker,
+                        name: b.name,
+                        percent: point?.percentChange || 0,
+                        color: b.color
+                      };
+                    });
+
+                    setComparisonHoverData({
+                      x,
+                      y: e.clientY - rect.top,
+                      portfolioPercent: portfolioPoint?.percentChange || 0,
+                      benchmarks: benchmarkValues,
+                      timestamp: portfolioPoint?.timestamp || 0
+                    });
+                  }}
+                  onMouseLeave={() => setComparisonHoverData(null)}
+                  onTouchMove={(e) => {
+                    if (!comparisonChartRef.current || portfolioPerformanceData.length === 0) return;
+                    const rect = comparisonChartRef.current.getBoundingClientRect();
+                    const x = e.touches[0].clientX - rect.left;
+                    const width = rect.width;
+                    if (width === 0) return;
+                    const ratio = Math.max(0, Math.min(1, x / width));
+                    const index = Math.floor(ratio * (portfolioPerformanceData.length - 1));
+                    const portfolioPoint = portfolioPerformanceData[index];
+
+                    const benchmarkValues = chartBenchmarks.map(b => {
+                      const benchmarkIndex = Math.floor(ratio * (b.data.length - 1));
+                      const point = b.data[benchmarkIndex];
+                      return {
+                        ticker: b.ticker,
+                        name: b.name,
+                        percent: point?.percentChange || 0,
+                        color: b.color
+                      };
+                    });
+
+                    setComparisonHoverData({
+                      x,
+                      y: e.touches[0].clientY - rect.top,
+                      portfolioPercent: portfolioPoint?.percentChange || 0,
+                      benchmarks: benchmarkValues,
+                      timestamp: portfolioPoint?.timestamp || 0
+                    });
+                  }}
+                  onTouchEnd={() => setComparisonHoverData(null)}
+                >
                 {!ratesLoaded || !historicalRatesLoaded ? (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="text-slate-500 text-sm flex items-center gap-2">
@@ -1230,7 +1316,75 @@ export const Summary: React.FC<SummaryProps> = ({
                           vectorEffect="non-scaling-stroke"
                         />
                       )}
+
+                      {/* Hover vertical line */}
+                      {comparisonHoverData && comparisonChartRef.current && (
+                        <line
+                          x1={(comparisonHoverData.x / comparisonChartRef.current.getBoundingClientRect().width) * 100}
+                          y1="0"
+                          x2={(comparisonHoverData.x / comparisonChartRef.current.getBoundingClientRect().width) * 100}
+                          y2="100"
+                          stroke="#94a3b8"
+                          strokeWidth="0.5"
+                          strokeDasharray="2 2"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      )}
                     </svg>
+                  </div>
+                )}
+
+                {/* Hover Tooltip */}
+                {comparisonHoverData && (
+                  <div
+                    className="absolute z-50 pointer-events-none"
+                    style={{
+                      left: comparisonHoverData.x > (comparisonChartRef.current?.getBoundingClientRect().width || 0) / 2
+                        ? comparisonHoverData.x - 180
+                        : comparisonHoverData.x + 12,
+                      top: 8
+                    }}
+                  >
+                    <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-3 min-w-[170px]">
+                      <div className="text-xs text-slate-400 mb-2 border-b border-slate-700 pb-2">
+                        {new Date(comparisonHoverData.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </div>
+
+                      {/* Portfolio */}
+                      <div className="flex items-center justify-between gap-4 mb-1">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          <span className="text-xs text-slate-300">Portfolio</span>
+                        </div>
+                        <span className={`text-xs font-semibold ${comparisonHoverData.portfolioPercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {comparisonHoverData.portfolioPercent >= 0 ? '+' : ''}{comparisonHoverData.portfolioPercent.toFixed(2)}%
+                        </span>
+                      </div>
+
+                      {/* Benchmarks */}
+                      {comparisonHoverData.benchmarks.map((b) => {
+                        const diff = comparisonHoverData.portfolioPercent - b.percent;
+                        return (
+                          <div key={b.ticker} className="mt-2 pt-2 border-t border-slate-700/50">
+                            <div className="flex items-center justify-between gap-4">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: b.color }} />
+                                <span className="text-xs text-slate-300">{b.name}</span>
+                              </div>
+                              <span className={`text-xs font-semibold ${b.percent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {b.percent >= 0 ? '+' : ''}{b.percent.toFixed(2)}%
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4 mt-1">
+                              <span className="text-[10px] text-slate-500">vs Portfolio</span>
+                              <span className={`text-[10px] font-medium ${diff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {diff >= 0 ? '▲' : '▼'} {Math.abs(diff).toFixed(2)}%
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 

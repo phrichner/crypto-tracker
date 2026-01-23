@@ -1,0 +1,576 @@
+/**
+ * Transaction History Page
+ *
+ * Main page component for viewing, searching, and filtering all transactions
+ * across portfolios. Provides bulk actions and CSV export functionality.
+ */
+
+import React, { useMemo } from 'react';
+import { Portfolio, Currency } from '../../types';
+import { useTransactionFilters } from '../../hooks/useTransactionFilters';
+import { exportTransactionsToCSV } from '../../utils/csvExport';
+import { getTransactionTypeInfo, FlattenedTransaction } from '../../utils/transactionHelpers';
+import { getPageNumbers } from '../../hooks/usePagination';
+import {
+  Search,
+  X,
+  Download,
+  ChevronUp,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Link2,
+  Link2Off,
+  Filter,
+  RotateCcw,
+} from 'lucide-react';
+
+interface TransactionHistoryPageProps {
+  portfolios: Portfolio[];
+  displayCurrency: Currency;
+  exchangeRates: Record<string, number>;
+  onEditTransaction?: (assetId: string, txId: string) => void;
+  onDeleteTransaction?: (assetId: string, txId: string) => void;
+}
+
+/**
+ * Tag color mapping (matches AssetCard.tsx)
+ */
+const TAG_COLORS: Record<string, string> = {
+  DCA: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+  FOMO: 'bg-red-500/20 text-red-300 border-red-500/30',
+  Strategic: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  Rebalance: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+  Emergency: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
+  'Profit-Taking': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+  Research: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
+};
+
+const getTagColorClass = (tag: string | undefined): string => {
+  if (!tag) return 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+  return TAG_COLORS[tag] || 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+};
+
+export const TransactionHistoryPage: React.FC<TransactionHistoryPageProps> = ({
+  portfolios,
+  displayCurrency,
+  exchangeRates,
+  onEditTransaction,
+  onDeleteTransaction,
+}) => {
+  const {
+    // Search
+    searchInputValue,
+    setSearchValue,
+    clearSearch,
+    isSearchDebouncing,
+
+    // Filters
+    filters,
+    setTransactionTypes,
+    setAssetTickers,
+    setTags,
+    setDateFrom,
+    setDateTo,
+    hasActiveFilters,
+    resetAllFilters,
+    filterOptions,
+
+    // Sort
+    sortConfig,
+    toggleSort,
+
+    // Linked view
+    showCombinedView,
+    setShowCombinedView,
+
+    // Selection
+    selectedIds,
+    toggleSelection,
+    selectAll,
+    clearSelection,
+    isAllSelected,
+
+    // Results
+    filteredTransactions,
+    paginatedTransactions,
+    totalCount,
+    filteredCount,
+
+    // Pagination
+    pagination,
+  } = useTransactionFilters(portfolios);
+
+  // Currency formatter
+  const currencyFmt = useMemo(() => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: displayCurrency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }, [displayCurrency]);
+
+  // Handle CSV export
+  const handleExport = () => {
+    const toExport = selectedIds.size > 0
+      ? filteredTransactions.filter(t => selectedIds.has(t.transaction.id))
+      : filteredTransactions;
+
+    exportTransactionsToCSV(toExport, 'transactions');
+  };
+
+  // Sort indicator component
+  const SortIndicator: React.FC<{ field: typeof sortConfig.field }> = ({ field }) => {
+    if (sortConfig.field !== field) {
+      return <span className="text-slate-600 ml-1">⇅</span>;
+    }
+    return sortConfig.direction === 'asc' ? (
+      <ChevronUp size={14} className="inline ml-1" />
+    ) : (
+      <ChevronDown size={14} className="inline ml-1" />
+    );
+  };
+
+  // Render transaction row
+  const renderTransactionRow = (item: FlattenedTransaction) => {
+    const tx = item.transaction;
+    const typeInfo = getTransactionTypeInfo(tx.type);
+    const isSelected = selectedIds.has(tx.id);
+
+    // Check if this transaction is part of a linked pair
+    const isLinkedTransaction = tx.linkedBuySellTransactionId != null;
+
+    // Format description for linked transactions
+    let linkDescription = '';
+    if (isLinkedTransaction) {
+      if (showCombinedView) {
+        // Combined view: full description
+        if (tx.type === 'BUY' && tx.sourceTicker) {
+          linkDescription = `Buy ${tx.quantity.toLocaleString()} ${item.assetTicker} with ${tx.sourceQuantity?.toLocaleString() || '?'} ${tx.sourceTicker}`;
+        } else if (tx.type === 'SELL' && tx.proceedsCurrency) {
+          linkDescription = `Sell ${tx.quantity.toLocaleString()} ${item.assetTicker} for ${tx.proceedsCurrency}`;
+        }
+      } else {
+        // Expanded view: show what this transaction is linked to
+        if (tx.type === 'BUY' && tx.sourceTicker) {
+          linkDescription = `Paid with ${tx.sourceQuantity?.toLocaleString() || '?'} ${tx.sourceTicker}`;
+        } else if (tx.type === 'SELL' && tx.proceedsCurrency) {
+          // Find the linked BUY to show destination quantity
+          const linkedBuy = item.linkedTransaction;
+          if (linkedBuy) {
+            linkDescription = `Exchanged for ${linkedBuy.transaction.quantity.toLocaleString()} ${linkedBuy.assetTicker}`;
+          } else {
+            linkDescription = `Exchanged for ${tx.proceedsCurrency}`;
+          }
+        }
+      }
+    }
+
+    return (
+      <tr
+        key={tx.id}
+        className={`hover:bg-white/5 border-b border-slate-700/50 ${
+          isSelected ? 'bg-indigo-500/10' : ''
+        }`}
+      >
+        {/* Selection checkbox */}
+        <td className="p-3 w-10">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => toggleSelection(tx.id)}
+            className="rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500"
+          />
+        </td>
+
+        {/* Date */}
+        <td className="p-3 text-slate-400 whitespace-nowrap">
+          {tx.date}
+        </td>
+
+        {/* Type */}
+        <td className="p-3">
+          <div className="flex items-center gap-1.5">
+            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium border ${typeInfo.bgClass}`}>
+              {typeInfo.label}
+            </span>
+            {isLinkedTransaction && (
+              <span title="Linked transaction">
+                <Link2 size={12} className="text-indigo-400" />
+              </span>
+            )}
+          </div>
+        </td>
+
+        {/* Asset / Description */}
+        <td className="p-3">
+          <div className="font-medium text-slate-200">{item.assetTicker}</div>
+          {linkDescription && (
+            <div className="text-xs text-indigo-400/70 flex items-center gap-1">
+              <span>{linkDescription}</span>
+            </div>
+          )}
+        </td>
+
+        {/* Quantity */}
+        <td className="p-3 text-right font-mono text-slate-300">
+          {tx.quantity.toLocaleString(undefined, { maximumFractionDigits: 8 })}
+        </td>
+
+        {/* Price */}
+        <td className="p-3 text-right font-mono text-slate-300">
+          {currencyFmt.format(tx.pricePerCoin)}
+        </td>
+
+        {/* Total */}
+        <td className="p-3 text-right font-mono text-slate-200">
+          {currencyFmt.format(tx.totalCost)}
+        </td>
+
+        {/* Tag */}
+        <td className="p-3">
+          {tx.tag && (
+            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium border ${getTagColorClass(tx.tag)}`}>
+              {tx.tag}
+            </span>
+          )}
+        </td>
+
+        {/* Portfolio */}
+        <td className="p-3 text-slate-500 text-sm">
+          {item.portfolioName}
+        </td>
+      </tr>
+    );
+  };
+
+  return (
+    <div className="bg-slate-900 min-h-screen">
+      {/* Header */}
+      <div className="bg-slate-800 border-b border-slate-700 px-6 py-4">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-2xl font-bold text-white">Transaction History</h1>
+          <div className="text-sm text-slate-400">
+            {filteredCount.toLocaleString()} of {totalCount.toLocaleString()} transactions
+          </div>
+        </div>
+
+        {/* Filter Bar - Row 1 */}
+        <div className="flex flex-wrap items-center gap-3 mb-3">
+          {/* Search Input */}
+          <div className="relative flex-1 min-w-[250px] max-w-md">
+            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={searchInputValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              placeholder="Search transactions..."
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg pl-10 pr-10 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            />
+            {searchInputValue && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+              >
+                <X size={18} />
+              </button>
+            )}
+            {isSearchDebouncing && (
+              <span className="absolute right-10 top-1/2 -translate-y-1/2 text-xs text-slate-500">
+                ...
+              </span>
+            )}
+          </div>
+
+          {/* Transaction Type Filter */}
+          <select
+            multiple={false}
+            value={filters.transactionTypes.length === 1 ? filters.transactionTypes[0] : ''}
+            onChange={(e) => {
+              const value = e.target.value;
+              setTransactionTypes(value ? [value as any] : []);
+            }}
+            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">All Types</option>
+            <option value="BUY">Buy</option>
+            <option value="SELL">Sell</option>
+            <option value="DEPOSIT">Deposit</option>
+            <option value="WITHDRAWAL">Withdraw</option>
+            <option value="TRANSFER">Transfer</option>
+            <option value="INCOME">Income</option>
+          </select>
+
+          {/* Asset Filter */}
+          <select
+            value={filters.assetTickers.length === 1 ? filters.assetTickers[0] : ''}
+            onChange={(e) => {
+              const value = e.target.value;
+              setAssetTickers(value ? [value] : []);
+            }}
+            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">All Assets</option>
+            {filterOptions.assets.map(asset => (
+              <option key={asset.ticker} value={asset.ticker}>
+                {asset.ticker} - {asset.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Date Range */}
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={filters.dateFrom || ''}
+              onChange={(e) => setDateFrom(e.target.value || null)}
+              className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="From"
+            />
+            <span className="text-slate-500">to</span>
+            <input
+              type="date"
+              value={filters.dateTo || ''}
+              onChange={(e) => setDateTo(e.target.value || null)}
+              className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="To"
+            />
+          </div>
+        </div>
+
+        {/* Filter Bar - Row 2 */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Tag Filter */}
+          <select
+            value={filters.tags.length === 1 ? filters.tags[0] : ''}
+            onChange={(e) => {
+              const value = e.target.value;
+              setTags(value ? [value] : []);
+            }}
+            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">All Tags</option>
+            {filterOptions.tags.map(tag => (
+              <option key={tag} value={tag}>{tag}</option>
+            ))}
+          </select>
+
+          {/* Linked Transaction Toggle */}
+          <button
+            onClick={() => setShowCombinedView(!showCombinedView)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+              showCombinedView
+                ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                : 'bg-slate-800 border-slate-600 text-slate-400 hover:text-slate-300'
+            }`}
+          >
+            {showCombinedView ? <Link2 size={16} /> : <Link2Off size={16} />}
+            {showCombinedView ? 'Combined View' : 'Expanded View'}
+          </button>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Reset Filters */}
+          {hasActiveFilters && (
+            <button
+              onClick={resetAllFilters}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium transition-colors"
+            >
+              <RotateCcw size={16} />
+              Reset Filters
+            </button>
+          )}
+
+          {/* Export Button */}
+          <button
+            onClick={handleExport}
+            disabled={filteredCount === 0}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium transition-colors"
+          >
+            <Download size={16} />
+            Export CSV
+            {selectedIds.size > 0 && ` (${selectedIds.size})`}
+          </button>
+        </div>
+      </div>
+
+      {/* Results Table */}
+      <div className="px-6 py-4">
+        {filteredCount === 0 ? (
+          <div className="text-center py-12">
+            <Filter size={48} className="mx-auto text-slate-600 mb-4" />
+            <p className="text-slate-400 text-lg mb-2">No transactions found</p>
+            <p className="text-slate-500 text-sm">
+              {hasActiveFilters
+                ? 'Try adjusting your filters or search query'
+                : 'Add some transactions to get started'}
+            </p>
+            {hasActiveFilters && (
+              <button
+                onClick={resetAllFilters}
+                className="mt-4 text-indigo-400 hover:text-indigo-300 text-sm"
+              >
+                Clear all filters
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Bulk Selection Info */}
+            {selectedIds.size > 0 && (
+              <div className="mb-4 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-lg flex items-center gap-4">
+                <span className="text-indigo-300">
+                  {selectedIds.size} transaction{selectedIds.size !== 1 ? 's' : ''} selected
+                </span>
+                <button
+                  onClick={clearSelection}
+                  className="text-indigo-400 hover:text-indigo-300 text-sm"
+                >
+                  Clear selection
+                </button>
+              </div>
+            )}
+
+            {/* Table */}
+            <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-900/50 text-slate-400 text-sm">
+                    <tr>
+                      <th className="p-3 w-10">
+                        <input
+                          type="checkbox"
+                          checked={isAllSelected}
+                          onChange={() => isAllSelected ? clearSelection() : selectAll()}
+                          className="rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500"
+                        />
+                      </th>
+                      <th
+                        className="p-3 cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('date')}
+                      >
+                        Date <SortIndicator field="date" />
+                      </th>
+                      <th
+                        className="p-3 cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('type')}
+                      >
+                        Type <SortIndicator field="type" />
+                      </th>
+                      <th
+                        className="p-3 cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('asset')}
+                      >
+                        Asset <SortIndicator field="asset" />
+                      </th>
+                      <th
+                        className="p-3 text-right cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('quantity')}
+                      >
+                        Quantity <SortIndicator field="quantity" />
+                      </th>
+                      <th
+                        className="p-3 text-right cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('price')}
+                      >
+                        Price <SortIndicator field="price" />
+                      </th>
+                      <th
+                        className="p-3 text-right cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('total')}
+                      >
+                        Total <SortIndicator field="total" />
+                      </th>
+                      <th
+                        className="p-3 cursor-pointer hover:text-slate-300 select-none"
+                        onClick={() => toggleSort('tag')}
+                      >
+                        Tag <SortIndicator field="tag" />
+                      </th>
+                      <th className="p-3">Portfolio</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-sm">
+                    {paginatedTransactions.map(renderTransactionRow)}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pagination */}
+            <div className="mt-4 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <span className="text-slate-400 text-sm">
+                  Showing {pagination.displayStart}-{pagination.displayEnd} of {filteredCount}
+                </span>
+                <select
+                  value={pagination.pageSize}
+                  onChange={(e) => pagination.setPageSize(Number(e.target.value) as any)}
+                  className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm"
+                >
+                  <option value={25}>25 per page</option>
+                  <option value={50}>50 per page</option>
+                  <option value={100}>100 per page</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={pagination.goToFirstPage}
+                  disabled={!pagination.hasPreviousPage}
+                  className="p-2 rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-400"
+                >
+                  <ChevronsLeft size={18} />
+                </button>
+                <button
+                  onClick={pagination.goToPreviousPage}
+                  disabled={!pagination.hasPreviousPage}
+                  className="p-2 rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-400"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+
+                {getPageNumbers(pagination.currentPage, pagination.totalPages).map((page, index) => (
+                  page === 'ellipsis' ? (
+                    <span key={`ellipsis-${index}`} className="px-2 text-slate-500">...</span>
+                  ) : (
+                    <button
+                      key={page}
+                      onClick={() => pagination.goToPage(page)}
+                      className={`px-3 py-1 rounded text-sm ${
+                        page === pagination.currentPage
+                          ? 'bg-indigo-600 text-white'
+                          : 'hover:bg-slate-700 text-slate-400'
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  )
+                ))}
+
+                <button
+                  onClick={pagination.goToNextPage}
+                  disabled={!pagination.hasNextPage}
+                  className="p-2 rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-400"
+                >
+                  <ChevronRight size={18} />
+                </button>
+                <button
+                  onClick={pagination.goToLastPage}
+                  disabled={!pagination.hasNextPage}
+                  className="p-2 rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-slate-400"
+                >
+                  <ChevronsRight size={18} />
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
